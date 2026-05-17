@@ -4,7 +4,7 @@ const MAX_RECORDING_MS = 6000;
 
 function supportedMimeType() {
   if (!window.MediaRecorder) return '';
-  const types = ['video/mp4;codecs=h264', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  const types = ['video/mp4', 'video/webm;codecs=h264', 'video/webm'];
   return types.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
@@ -141,7 +141,8 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
 
     recorder.onstop = () => {
       setIsRecording(false);
-      const blob = new Blob(chunksRef.current, { type: mimeType || 'video/webm' });
+      const fallbackType = chunksRef.current.find((chunk) => chunk.type)?.type || '';
+      const blob = new Blob(chunksRef.current, { type: mimeType || fallbackType });
       if (!blob.size) {
         setError('No video was captured. Please try again and keep the camera open until recording stops.');
         return;

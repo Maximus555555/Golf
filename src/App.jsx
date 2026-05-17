@@ -36,18 +36,20 @@ export default function App() {
     setAnalysisMessage('Finding body landmarks in your swing...');
 
     try {
-      const poseTimeline = await analyzeVideoBlob(recordedSwing.blob, {
+      const { timeline: poseTimeline, stats: poseStats } = await analyzeVideoBlob(recordedSwing.blob, {
         onProgress: (progress) => setAnalysisProgress(progress),
       });
       setAnalysisMessage('Checking beginner swing patterns...');
-      const swingFeedback = analyzeSwing(poseTimeline);
+      const swingFeedback = analyzeSwing(poseTimeline, poseStats);
       setAnalysis({ ...swingFeedback, poseFrameCount: poseTimeline.length, error: null });
     } catch (error) {
-      const fallbackFeedback = analyzeSwing([]);
+      const errorMessage = error instanceof Error ? error.message : 'Pose analysis was unavailable for this recording.';
+      const fallbackFeedback = analyzeSwing([], { finalReason: errorMessage });
       setAnalysis({
         ...fallbackFeedback,
         poseFrameCount: 0,
-        error: error instanceof Error ? error.message : 'Pose analysis was unavailable for this recording.',
+        error: errorMessage,
+        fullFailure: true,
       });
     } finally {
       setScreen(SCREEN.results);
