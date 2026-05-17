@@ -1,4 +1,4 @@
-import { analyzeVideoBlob } from './poseDetector';
+import { analyzeVideoBlob } from './poseDetector.js';
 
 const referenceTimelineCache = new Map();
 
@@ -11,11 +11,12 @@ export async function analyzeReferenceSwing(referenceSwing, videoBlob) {
     return referenceTimelineCache.get(referenceSwing.id);
   }
 
-  const timeline = await analyzeVideoBlob(videoBlob);
+  const { timeline, stats } = await analyzeVideoBlob(videoBlob);
   const analyzedReference = {
     id: referenceSwing.id,
     metadata: referenceSwing,
     timeline,
+    stats,
     normalizedTimeline: normalizeReferenceTimeline(timeline),
   };
 

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import LandingScreen from './components/LandingScreen.jsx';
 import CameraRecorder from './components/CameraRecorder.jsx';
 import AnalysisScreen from './components/AnalysisScreen.jsx';
@@ -20,9 +20,20 @@ export default function App() {
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisMessage, setAnalysisMessage] = useState('Preparing your swing analysis...');
 
-  const replayUrl = useMemo(() => {
-    if (!recording?.blob) return null;
-    return URL.createObjectURL(recording.blob);
+  const [replayUrl, setReplayUrl] = useState(null);
+
+  useEffect(() => {
+    if (!recording?.blob) {
+      setReplayUrl(null);
+      return undefined;
+    }
+
+    const objectUrl = URL.createObjectURL(recording.blob);
+    setReplayUrl(objectUrl);
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
   }, [recording]);
 
   const handleStartCamera = useCallback(() => {
@@ -57,12 +68,11 @@ export default function App() {
   }, []);
 
   const handleRecordAgain = useCallback(() => {
-    if (replayUrl) URL.revokeObjectURL(replayUrl);
     setRecording(null);
     setAnalysis(null);
     setAnalysisProgress(0);
     setScreen(SCREEN.camera);
-  }, [replayUrl]);
+  }, []);
 
   return (
     <main className="app-shell">
