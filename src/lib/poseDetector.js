@@ -8,16 +8,6 @@ const MIN_SAMPLED_FRAMES = 20;
 const MAX_SAMPLED_FRAMES = 40;
 const MIN_VISIBILITY = 0.45;
 
-const LANDMARK = {
-  nose: 0,
-  leftEar: 7,
-  rightEar: 8,
-  leftShoulder: 11,
-  rightShoulder: 12,
-  leftHip: 23,
-  rightHip: 24,
-};
-
 const DEBUG_LANDMARKS = [
   { name: 'nose', index: 0 },
   { name: 'leftShoulder', index: 11 },
@@ -32,6 +22,10 @@ const DEBUG_LANDMARKS = [
   { name: 'rightKnee', index: 26 },
   { name: 'leftAnkle', index: 27 },
   { name: 'rightAnkle', index: 28 },
+  { name: 'leftHeel', index: 29 },
+  { name: 'rightHeel', index: 30 },
+  { name: 'leftFootIndex', index: 31 },
+  { name: 'rightFootIndex', index: 32 },
 ];
 
 let landmarkerPromise;
@@ -90,7 +84,6 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
     const missingLandmarkCounts = new Map(DEBUG_LANDMARKS.map(({ name }) => [name, 0]));
     let framesWherePoseDetectionRan = 0;
     let framesWithAnyPose = 0;
-    let framesWithCoreLandmarks = 0;
 
     for (const [index, time] of sampleTimes.entries()) {
       await seekVideo(video, time);
@@ -98,9 +91,8 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       const timestampMs = Math.round(time * 1000);
       const landmarks = await detector.detectForVideo(video, timestampMs);
 
-      if (landmarks?.length) {
+      if (landmarks?.length && hasAnyVisibleLandmark(landmarks)) {
         framesWithAnyPose += 1;
-        if (hasCoreLandmarks(landmarks)) framesWithCoreLandmarks += 1;
         recordMissingLandmarks(landmarks, missingLandmarkCounts);
         timeline.push({ timestampMs, landmarks });
       } else {
@@ -114,8 +106,8 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       totalFramesSampled: sampleTimes.length,
       framesWherePoseDetectionRan,
       framesWithAnyPose,
-      framesWithCoreLandmarks,
       usableFramePercentage: sampleTimes.length ? framesWithAnyPose / sampleTimes.length : 0,
+      visibleLandmarkFrequency: getVisibleLandmarkFrequency(missingLandmarkCounts, sampleTimes.length),
       mostOftenMissingLandmarks: getMostMissingLandmarks(missingLandmarkCounts),
       finalReason: 'pose-detection-complete',
     };
@@ -150,17 +142,8 @@ function isVisible(landmark) {
   return Boolean(landmark) && (landmark.visibility ?? 1) >= MIN_VISIBILITY;
 }
 
-function hasCoreLandmarks(landmarks) {
-  const hasHead = [LANDMARK.nose, LANDMARK.leftEar, LANDMARK.rightEar].some((index) => isVisible(landmarks[index]));
-  const coreGroupsVisible = [
-    hasHead,
-    isVisible(landmarks[LANDMARK.leftShoulder]),
-    isVisible(landmarks[LANDMARK.rightShoulder]),
-    isVisible(landmarks[LANDMARK.leftHip]),
-    isVisible(landmarks[LANDMARK.rightHip]),
-  ].filter(Boolean).length;
-
-  return coreGroupsVisible >= 4;
+function hasAnyVisibleLandmark(landmarks) {
+  return DEBUG_LANDMARKS.some(({ index }) => isVisible(landmarks[index]));
 }
 
 function recordMissingLandmarks(landmarks, missingLandmarkCounts) {
@@ -179,13 +162,22 @@ function getMostMissingLandmarks(missingLandmarkCounts) {
     .slice(0, 5);
 }
 
+function getVisibleLandmarkFrequency(missingLandmarkCounts, totalFramesSampled) {
+  const denominator = totalFramesSampled || 1;
+  return DEBUG_LANDMARKS.map(({ name }) => {
+    const missingFrames = missingLandmarkCounts.get(name) || 0;
+    const visibleFrames = Math.max(0, denominator - missingFrames);
+    return { name, visibleFrames, visibleRatio: visibleFrames / denominator };
+  });
+}
+
 function logPoseDetectionStats(stats) {
   console.info('[SwingFix] Video pose detection stats', {
     totalFramesSampled: stats.totalFramesSampled,
     framesWherePoseDetectionRan: stats.framesWherePoseDetectionRan,
-    framesWithAnyPose: stats.framesWithAnyPose,
-    framesWithCoreLandmarks: stats.framesWithCoreLandmarks,
+    framesWithAnyLandmarks: stats.framesWithAnyPose,
     usableFramePercentage: `${Math.round(stats.usableFramePercentage * 100)}%`,
+    visibleLandmarkFrequencySummary: stats.visibleLandmarkFrequency,
     mostOftenMissingLandmarks: stats.mostOftenMissingLandmarks,
     finalReason: stats.finalReason,
   });
@@ -196,8 +188,8 @@ function createEmptyStats(finalReason) {
     totalFramesSampled: 0,
     framesWherePoseDetectionRan: 0,
     framesWithAnyPose: 0,
-    framesWithCoreLandmarks: 0,
     usableFramePercentage: 0,
+    visibleLandmarkFrequency: [],
     mostOftenMissingLandmarks: [],
     finalReason,
   };

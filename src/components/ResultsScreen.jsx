@@ -4,6 +4,7 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
   const issues = analysis?.issues ?? [];
   const recordingQualityNotes = analysis?.recordingQualityNotes ?? [];
   const diagnostics = analysis?.diagnostics ?? {};
+  const analyzedIssueCategories = diagnostics.analyzedIssueCategories ?? [];
   const showDebugPanel = import.meta.env.DEV && diagnostics.totalFramesSampled !== undefined;
 
   return (
@@ -14,7 +15,7 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
         <p>{analysis?.summary}</p>
         {analysis?.fullFailure && (
           <p className="inline-warning">
-            We could not read enough body landmarks from this recording. Try brighter light, a steady camera, and a full-body view.
+            We could not read enough body landmarks from this recording. Try brighter light, a steady camera, and keeping more of your body in view.
           </p>
         )}
         {analysis?.error && <p className="debug-error">Debug detail: {analysis.error}</p>}
@@ -40,8 +41,8 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
               <dd>{diagnostics.framesWithAnyPose}</dd>
             </div>
             <div>
-              <dt>Core frames found</dt>
-              <dd>{diagnostics.framesWithCoreLandmarks}</dd>
+              <dt>Analyzable categories</dt>
+              <dd>{Object.values(diagnostics.analyzability || {}).filter((category) => category.analyzable).length}</dd>
             </div>
             <div>
               <dt>Usable percentage</dt>
@@ -62,6 +63,10 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
               <FeedbackCard key={issue.id} feedback={issue} index={index} />
             ))}
           </div>
+        ) : analyzedIssueCategories.length ? (
+          <p className="empty-note">
+            No major swing flaw was detected in the visible categories analyzed: {analyzedIssueCategories.map(({ label }) => label).join(', ')}.
+          </p>
         ) : (
           <p className="empty-note">No swing flaws are shown unless the app can see enough body movement to support them.</p>
         )}
