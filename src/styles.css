@@ -78,7 +78,8 @@ button {
 .feedback-card,
 .replay-card,
 .tips-card,
-.coach-note {
+.coach-note,
+.analysis-debug-panel {
   border: 1px solid rgba(15, 61, 46, 0.12);
   border-radius: 28px;
   background: rgba(255, 255, 255, 0.86);
@@ -481,11 +482,44 @@ button {
   .camera-card,
   .tips-card,
   .empty-note,
-  .recording-quality-list {
+  .recording-quality-list,
+  .analysis-debug-panel {
     padding: 24px;
   }
 
   .video-frame {
     min-height: 560px;
   }
+}
+
+.debug-error {
+  margin-top: 8px !important;
+  color: #6a4b13 !important;
+  font-size: 0.82rem !important;
+}
+
+.analysis-debug-panel {
+  border: 1px dashed rgba(15, 61, 46, 0.26);
+  border-radius: 18px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.62);
+  color: #244538;
+  font-size: 0.82rem;
+}
+
+.analysis-debug-panel dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.analysis-debug-panel dt {
+  color: #4f7b67;
+  font-weight: 800;
+}
+
+.analysis-debug-panel dd {
+  margin: 2px 0 0;
+  font-weight: 900;
 }

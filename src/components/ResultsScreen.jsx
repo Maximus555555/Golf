@@ -3,6 +3,8 @@ import FeedbackCard from './FeedbackCard.jsx';
 export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
   const issues = analysis?.issues ?? [];
   const recordingQualityNotes = analysis?.recordingQualityNotes ?? [];
+  const diagnostics = analysis?.diagnostics ?? {};
+  const showDebugPanel = import.meta.env.DEV && diagnostics.totalFramesSampled !== undefined;
 
   return (
     <section className="screen results-screen">
@@ -10,11 +12,12 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
         <p className="eyebrow">Swing results</p>
         <h2>{issues.length ? 'Your top swing notes' : 'No major swing issue detected'}</h2>
         <p>{analysis?.summary}</p>
-        {analysis?.error && (
+        {analysis?.fullFailure && (
           <p className="inline-warning">
             We could not read enough body landmarks from this recording. Try brighter light, a steady camera, and a full-body view.
           </p>
         )}
+        {analysis?.error && <p className="debug-error">Debug detail: {analysis.error}</p>}
       </div>
 
       {replayUrl && (
@@ -22,6 +25,30 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
           <h3>Replay your swing</h3>
           <video src={replayUrl} controls playsInline className="replay-video" />
         </div>
+      )}
+
+      {showDebugPanel && (
+        <aside className="analysis-debug-panel" aria-label="Analysis debug stats">
+          <p className="eyebrow">Dev debug</p>
+          <dl>
+            <div>
+              <dt>Frames sampled</dt>
+              <dd>{diagnostics.totalFramesSampled}</dd>
+            </div>
+            <div>
+              <dt>Pose frames found</dt>
+              <dd>{diagnostics.framesWithAnyPose}</dd>
+            </div>
+            <div>
+              <dt>Core frames found</dt>
+              <dd>{diagnostics.framesWithCoreLandmarks}</dd>
+            </div>
+            <div>
+              <dt>Usable percentage</dt>
+              <dd>{Math.round((diagnostics.usableFramePercentage || 0) * 100)}%</dd>
+            </div>
+          </dl>
+        </aside>
       )}
 
       <section className="results-section" aria-labelledby="swing-feedback-heading">
