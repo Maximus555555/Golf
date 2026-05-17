@@ -11,7 +11,7 @@ export async function loadReferenceSwingVideo(referenceSwing) {
     return null;
   }
 
-  const response = await fetch(resolveReferenceSwingUrl(referenceSwing.videoPath));
+  const response = await fetch(referenceSwing.videoPath);
   if (!response.ok) {
     throw new Error(`Reference swing video could not be loaded: ${referenceSwing.id}`);
   }
@@ -21,13 +21,4 @@ export async function loadReferenceSwingVideo(referenceSwing) {
 
 export function hasReferenceSwings() {
   return referenceSwingMetadata.length > 0;
-}
-
-function resolveReferenceSwingUrl(videoPath) {
-  if (/^(?:[a-z][a-z\d+.-]*:)?\/\//i.test(videoPath) || videoPath.startsWith('data:') || videoPath.startsWith('blob:')) {
-    return videoPath;
-  }
-
-  const base = import.meta.env.BASE_URL || './';
-  return new URL(videoPath.replace(/^\//, ''), new URL(base, window.location.href)).toString();
 }

@@ -7,7 +7,6 @@ const TARGET_SAMPLE_FPS = 5;
 const MIN_SAMPLED_FRAMES = 20;
 const MAX_SAMPLED_FRAMES = 40;
 const MIN_VISIBILITY = 0.45;
-const SEEK_END_EPSILON_SECONDS = 0.05;
 
 const LANDMARK = {
   nose: 0,
@@ -135,12 +134,11 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
 
 function createSampleTimes(duration) {
   const safeDuration = duration || MAX_ANALYSIS_SECONDS;
-  const lastSafeTime = Math.max(0, safeDuration - SEEK_END_EPSILON_SECONDS);
   const frameCount = Math.max(MIN_SAMPLED_FRAMES, Math.min(MAX_SAMPLED_FRAMES, Math.round(safeDuration * TARGET_SAMPLE_FPS)));
-  if (frameCount <= 1 || lastSafeTime === 0) return [0];
+  if (frameCount <= 1) return [0];
   return Array.from({ length: frameCount }, (_, index) => {
     const progress = index / (frameCount - 1);
-    return Math.min(lastSafeTime, progress * lastSafeTime);
+    return Math.min(safeDuration, progress * safeDuration);
   });
 }
 
@@ -249,8 +247,7 @@ function waitForCanPlay(video) {
 }
 
 function seekVideo(video, time) {
-  const lastSafeTime = Math.max(0, getFiniteDuration(video.duration) - SEEK_END_EPSILON_SECONDS);
-  const clampedTime = Math.max(0, Math.min(time, lastSafeTime));
+  const clampedTime = Math.max(0, Math.min(time, getFiniteDuration(video.duration)));
   if (Math.abs(video.currentTime - clampedTime) < 0.01 && video.readyState >= 2) return Promise.resolve();
 
   return new Promise((resolve, reject) => {
