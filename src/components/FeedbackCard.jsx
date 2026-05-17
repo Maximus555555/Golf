@@ -8,6 +8,7 @@ export default function FeedbackCard({ feedback, index }) {
           <h3>{feedback.title}</h3>
         </div>
       </div>
+      {feedback.movementDescription && <p className="movement-description">{feedback.movementDescription}</p>}
       <dl>
         <div>
           <dt>What happened</dt>
@@ -24,6 +25,10 @@ export default function FeedbackCard({ feedback, index }) {
         <div>
           <dt>Practice drill</dt>
           <dd>{feedback.drill}</dd>
+        </div>
+        <div>
+          <dt>Recording tip</dt>
+          <dd>{feedback.recordingTip}</dd>
         </div>
       </dl>
     </article>

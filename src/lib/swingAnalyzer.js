@@ -1,3 +1,5 @@
+import { SEVERITY_SCORE, getCoachingResponse } from '../data/coachingResponses.js';
+
 const LANDMARK = {
   nose: 0,
   leftShoulder: 11,
@@ -8,64 +10,42 @@ const LANDMARK = {
   rightWrist: 16,
   leftHip: 23,
   rightHip: 24,
+  leftKnee: 25,
+  rightKnee: 26,
   leftAnkle: 27,
   rightAnkle: 28,
 };
 
 const MIN_VISIBILITY = 0.45;
+const REQUIRED_FULL_BODY_LANDMARKS = [
+  LANDMARK.nose,
+  LANDMARK.leftShoulder,
+  LANDMARK.rightShoulder,
+  LANDMARK.leftWrist,
+  LANDMARK.rightWrist,
+  LANDMARK.leftHip,
+  LANDMARK.rightHip,
+  LANDMARK.leftKnee,
+  LANDMARK.rightKnee,
+  LANDMARK.leftAnkle,
+  LANDMARK.rightAnkle,
+];
 
-const ISSUE_COPY = {
-  headMovement: {
-    id: 'head-movement',
-    title: 'Keep your head more centered',
-    severity: 'medium',
-    whatHappened: 'Your head moved noticeably during the swing.',
-    whyItMatters: 'Large head movement can make it harder to return the club consistently to the ball.',
-    howToFix: 'Keep your head more centered while turning your shoulders around your body.',
-    drill: 'Make slow half-swings while keeping your eyes on the same point.',
-  },
-  postureLoss: {
-    id: 'posture-loss',
-    title: 'Maintain your posture longer',
-    severity: 'medium',
-    whatHappened: 'Your upper body appeared to rise during the swing.',
-    whyItMatters: 'Standing up can change your swing path and cause inconsistent contact.',
-    howToFix: 'Keep your knees flexed and maintain your chest angle longer.',
-    drill: 'Practice slow swings while holding your finish and checking that your posture stays athletic.',
-  },
-  leadArmCollapse: {
-    id: 'lead-arm-collapse',
-    title: 'Keep width in your lead arm',
-    severity: 'low',
-    whatHappened: 'Your lead arm appeared to bend significantly near the top of the backswing.',
-    whyItMatters: 'A collapsing lead arm can make the swing longer and harder to control.',
-    howToFix: 'Shorten the backswing and keep the lead arm comfortably extended.',
-    drill: 'Take three-quarter swings focusing on width, not power.',
-  },
-  hipSway: {
-    id: 'hip-sway',
-    title: 'Turn instead of swaying',
-    severity: 'medium',
-    whatHappened: 'Your hips appeared to slide sideways during the swing.',
-    whyItMatters: 'Too much sway can make timing and contact less consistent.',
-    howToFix: 'Feel like you are turning around your center instead of sliding off the ball.',
-    drill: 'Make practice swings with your feet slightly closer together to improve centered rotation.',
-  },
-  poorBalance: {
-    id: 'poor-balance',
-    title: 'Hold a balanced finish',
-    severity: 'low',
-    whatHappened: 'Your finish position looked unstable.',
-    whyItMatters: 'Poor balance often means the swing was rushed or off-center.',
-    howToFix: 'Swing at 70% speed and hold the finish.',
-    drill: 'After each swing, hold your finish for three seconds.',
-  },
+const RECORDING_QUALITY_WARNINGS = {
+  body_not_fully_visible: 'The app could not clearly see your full body. Record again with your head, hands, hips, knees, and feet visible.',
+  camera_too_shaky: 'The camera appears to move during the swing. Place the phone on a stable surface for better feedback.',
+  too_few_usable_frames: 'The app could not read enough of the swing. Try recording again in brighter light with your full body visible.',
+  wrong_distance: 'The camera may be too close. Move the phone farther back so your whole body stays in frame.',
 };
 
 function point(frame, index) {
   const landmark = frame?.landmarks?.[index];
   if (!landmark || (landmark.visibility ?? 1) < MIN_VISIBILITY) return null;
   return landmark;
+}
+
+function rawPoint(frame, index) {
+  return frame?.landmarks?.[index] ?? null;
 }
 
 function midpoint(a, b) {
@@ -99,44 +79,88 @@ function max(values) {
   return usable.length ? Math.max(...usable) : null;
 }
 
+function min(values) {
+  const usable = values.filter((value) => Number.isFinite(value));
+  return usable.length ? Math.min(...usable) : null;
+}
+
+function standardDeviation(values) {
+  const usable = values.filter((value) => Number.isFinite(value));
+  if (usable.length < 2) return 0;
+  const mean = average(usable);
+  const variance = average(usable.map((value) => (value - mean) ** 2));
+  return Math.sqrt(variance || 0);
+}
+
 function frameMetrics(frame) {
   const leftShoulder = point(frame, LANDMARK.leftShoulder);
   const rightShoulder = point(frame, LANDMARK.rightShoulder);
   const leftHip = point(frame, LANDMARK.leftHip);
   const rightHip = point(frame, LANDMARK.rightHip);
+  const leftKnee = point(frame, LANDMARK.leftKnee);
+  const rightKnee = point(frame, LANDMARK.rightKnee);
   const leftAnkle = point(frame, LANDMARK.leftAnkle);
   const rightAnkle = point(frame, LANDMARK.rightAnkle);
   const leftElbow = point(frame, LANDMARK.leftElbow);
   const leftWrist = point(frame, LANDMARK.leftWrist);
+  const rightWrist = point(frame, LANDMARK.rightWrist);
+  const visibleRequiredCount = REQUIRED_FULL_BODY_LANDMARKS.filter((index) => point(frame, index)).length;
+  const visiblePoints = REQUIRED_FULL_BODY_LANDMARKS.map((index) => rawPoint(frame, index)).filter(Boolean);
 
   return {
     nose: point(frame, LANDMARK.nose),
+    leftWrist,
+    rightWrist,
     shoulderCenter: midpoint(leftShoulder, rightShoulder),
     hipCenter: midpoint(leftHip, rightHip),
+    kneeCenter: midpoint(leftKnee, rightKnee),
     ankleCenter: midpoint(leftAnkle, rightAnkle),
     shoulderWidth: distance(leftShoulder, rightShoulder),
     stanceWidth: distance(leftAnkle, rightAnkle),
     leadArmAngle: angleDegrees(leftShoulder, leftElbow, leftWrist),
+    visibleRequiredRatio: visibleRequiredCount / REQUIRED_FULL_BODY_LANDMARKS.length,
+    bounds: boundingBox(visiblePoints),
   };
 }
 
-function makeIssue(key, confidence, severityOverride) {
+function boundingBox(points) {
+  if (!points.length) return null;
+  const xs = points.map((landmark) => landmark.x).filter(Number.isFinite);
+  const ys = points.map((landmark) => landmark.y).filter(Number.isFinite);
+  if (!xs.length || !ys.length) return null;
+
   return {
-    ...ISSUE_COPY[key],
-    severity: severityOverride ?? ISSUE_COPY[key].severity,
+    minX: Math.min(...xs),
+    maxX: Math.max(...xs),
+    minY: Math.min(...ys),
+    maxY: Math.max(...ys),
+  };
+}
+
+function makeIssue(issueId, severity, confidence, movementDescription) {
+  const response = getCoachingResponse(issueId, severity);
+  if (!response) return null;
+
+  return {
+    ...response,
+    id: `${issueId}-${severity}`,
     confidence,
+    movementDescription,
   };
 }
 
 export function analyzeSwing(poseTimeline = []) {
   const metrics = poseTimeline.map(frameMetrics);
   const usableMetrics = metrics.filter((metric) => metric.shoulderCenter && metric.hipCenter);
+  const recordingQualityNotes = getRecordingQualityNotes(metrics, usableMetrics, poseTimeline.length);
+  const hasCriticalQualityProblem = recordingQualityNotes.some((note) => note.code !== 'camera_too_shaky');
 
-  if (usableMetrics.length < 6) {
+  if (hasCriticalQualityProblem) {
     return {
       issues: [],
-      summary: 'No major beginner issues were detected from this recording. Try recording again with your full body visible from the side or front.',
-      diagnostics: { usableFrames: usableMetrics.length, reason: 'not-enough-visible-landmarks' },
+      recordingQualityNotes,
+      summary: 'The recording quality was too limited for reliable swing feedback. Please record again before using the swing notes.',
+      diagnostics: { usableFrames: usableMetrics.length, totalFrames: poseTimeline.length, reason: 'weak-or-incomplete-pose-data' },
     };
   }
 
@@ -149,33 +173,61 @@ export function analyzeSwing(poseTimeline = []) {
   const setupHipY = average(setupWindow.map((metric) => metric.hipCenter?.y));
   const setupHip = midpointOfPoints(setupWindow.map((metric) => metric.hipCenter));
 
-  const issues = [];
+  const detectedIssues = [];
 
   const maxHeadMove = max(
     usableMetrics.map((metric) => (metric.nose && setupNose ? distance(metric.nose, setupNose) / setupShoulderWidth : null)),
   );
-  if (maxHeadMove > 0.75) {
-    issues.push(makeIssue('headMovement', clampConfidence((maxHeadMove - 0.55) / 0.7), maxHeadMove > 1.05 ? 'high' : 'medium'));
+  if (maxHeadMove > 0.45) {
+    detectedIssues.push(
+      makeIssue(
+        'excessive_head_movement',
+        severityFromThresholds(maxHeadMove, 0.45, 0.75, 1.05),
+        clampConfidence((maxHeadMove - 0.3) / 0.85),
+        `Detected head movement was about ${formatRatio(maxHeadMove)} shoulder widths from your setup position.`,
+      ),
+    );
   }
 
   const maxShoulderRise = max(usableMetrics.map((metric) => (setupShoulderY && metric.shoulderCenter ? setupShoulderY - metric.shoulderCenter.y : null)));
   const maxHipRise = max(usableMetrics.map((metric) => (setupHipY && metric.hipCenter ? setupHipY - metric.hipCenter.y : null)));
   const postureRise = ((maxShoulderRise || 0) + (maxHipRise || 0) * 0.7) / setupShoulderWidth;
-  if (postureRise > 0.35) {
-    issues.push(makeIssue('postureLoss', clampConfidence((postureRise - 0.25) / 0.45), postureRise > 0.58 ? 'high' : 'medium'));
+  if (postureRise > 0.22) {
+    detectedIssues.push(
+      makeIssue(
+        'posture_loss',
+        severityFromThresholds(postureRise, 0.22, 0.35, 0.58),
+        clampConfidence((postureRise - 0.16) / 0.5),
+        `Your shoulder and hip height rose by about ${formatRatio(postureRise)} shoulder widths compared with setup.`,
+      ),
+    );
   }
 
   const backswingWindow = usableMetrics.slice(Math.round(usableMetrics.length * 0.25), Math.round(usableMetrics.length * 0.62));
-  const minLeadArmAngle = Math.min(...backswingWindow.map((metric) => metric.leadArmAngle).filter(Number.isFinite));
-  if (Number.isFinite(minLeadArmAngle) && minLeadArmAngle < 132) {
-    issues.push(makeIssue('leadArmCollapse', clampConfidence((140 - minLeadArmAngle) / 38), minLeadArmAngle < 112 ? 'medium' : 'low'));
+  const minLeadArmAngle = min(backswingWindow.map((metric) => metric.leadArmAngle));
+  if (Number.isFinite(minLeadArmAngle) && minLeadArmAngle < 140) {
+    detectedIssues.push(
+      makeIssue(
+        'lead_arm_collapse',
+        severityFromThresholds(140 - minLeadArmAngle, 0, 18, 40),
+        clampConfidence((145 - minLeadArmAngle) / 55),
+        `The smallest visible lead-arm angle was about ${Math.round(minLeadArmAngle)}° near the backswing.`,
+      ),
+    );
   }
 
   const maxHipSway = max(
     usableMetrics.map((metric) => (metric.hipCenter && setupHip ? Math.abs(metric.hipCenter.x - setupHip.x) / setupStanceWidth : null)),
   );
-  if (maxHipSway > 0.32) {
-    issues.push(makeIssue('hipSway', clampConfidence((maxHipSway - 0.25) / 0.35), maxHipSway > 0.5 ? 'high' : 'medium'));
+  if (maxHipSway > 0.22) {
+    detectedIssues.push(
+      makeIssue(
+        'hip_sway',
+        severityFromThresholds(maxHipSway, 0.22, 0.32, 0.5),
+        clampConfidence((maxHipSway - 0.16) / 0.42),
+        `Your hip center shifted sideways about ${formatRatio(maxHipSway)} stance widths from setup.`,
+      ),
+    );
   }
 
   const finishDrift = average(
@@ -186,26 +238,146 @@ export function analyzeSwing(poseTimeline = []) {
       return headToAnkles * 0.6 + hipsToAnkles * 0.4;
     }),
   );
-  if (finishDrift > 0.38) {
-    issues.push(makeIssue('poorBalance', clampConfidence((finishDrift - 0.3) / 0.4), finishDrift > 0.58 ? 'medium' : 'low'));
+  if (finishDrift > 0.3) {
+    detectedIssues.push(
+      makeIssue(
+        'poor_finish_balance',
+        severityFromThresholds(finishDrift, 0.3, 0.38, 0.58),
+        clampConfidence((finishDrift - 0.22) / 0.46),
+        `At the finish, your head and hips drifted about ${formatRatio(finishDrift)} stance widths away from your foot center.`,
+      ),
+    );
   }
 
-  const topIssues = issues.sort((a, b) => b.confidence - a.confidence).slice(0, 3);
+  const shoulderTurnRatio = getShoulderTurnRatio(backswingWindow, setupShoulderWidth);
+  if (Number.isFinite(shoulderTurnRatio) && shoulderTurnRatio > 0.82) {
+    detectedIssues.push(
+      makeIssue(
+        'weak_shoulder_turn',
+        severityFromThresholds(shoulderTurnRatio, 0.82, 0.88, 0.95),
+        clampConfidence((shoulderTurnRatio - 0.76) / 0.24),
+        `Your visible shoulder line changed only slightly in the backswing, staying near ${Math.round(shoulderTurnRatio * 100)}% of its setup width.`,
+      ),
+    );
+  }
+
+  const topIssues = rankIssues(removeDuplicateIssues(detectedIssues)).slice(0, 3);
 
   return {
     issues: topIssues,
+    recordingQualityNotes,
     summary: topIssues.length
-      ? 'Here are the biggest beginner swing patterns detected from your recording.'
-      : 'No major beginner issues were detected from this recording. Try recording again with your full body visible from the side or front.',
+      ? 'Here are the top swing patterns detected from your visible body movement.'
+      : 'No major beginner swing issue was detected from the visible movement in this recording.',
     diagnostics: {
       usableFrames: usableMetrics.length,
+      totalFrames: poseTimeline.length,
       maxHeadMove,
       postureRise,
       minLeadArmAngle,
       maxHipSway,
       finishDrift,
+      shoulderTurnRatio,
     },
   };
+}
+
+function getRecordingQualityNotes(metrics, usableMetrics, totalFrames) {
+  const notes = [];
+  const averageVisibility = average(metrics.map((metric) => metric.visibleRequiredRatio)) || 0;
+  const inFrameRatio = average(metrics.map((metric) => (isComfortablyInFrame(metric.bounds) ? 1 : 0))) || 0;
+  const tooCloseRatio = average(metrics.map((metric) => (looksTooClose(metric.bounds) ? 1 : 0))) || 0;
+  const shakeScore = getCameraShakeScore(usableMetrics);
+
+  if (totalFrames < 6 || usableMetrics.length < 6) {
+    notes.push(makeRecordingNote('too_few_usable_frames'));
+  }
+
+  if (metrics.length && (averageVisibility < 0.65 || inFrameRatio < 0.62)) {
+    notes.push(makeRecordingNote('body_not_fully_visible'));
+  }
+
+  if (metrics.length && tooCloseRatio > 0.25) {
+    notes.push(makeRecordingNote('wrong_distance'));
+  }
+
+  if (shakeScore > 0.18) {
+    notes.push(makeRecordingNote('camera_too_shaky'));
+  }
+
+  return removeDuplicateNotes(notes);
+}
+
+function makeRecordingNote(code) {
+  return {
+    code,
+    message: RECORDING_QUALITY_WARNINGS[code],
+  };
+}
+
+function isComfortablyInFrame(bounds) {
+  if (!bounds) return false;
+  return bounds.minX >= -0.05 && bounds.maxX <= 1.05 && bounds.minY >= -0.05 && bounds.maxY <= 1.05;
+}
+
+function looksTooClose(bounds) {
+  if (!bounds) return false;
+  const touchesHorizontalEdge = bounds.minX < 0.04 || bounds.maxX > 0.96;
+  const touchesVerticalEdge = bounds.minY < 0.04 || bounds.maxY > 0.96;
+  const fillsFrame = bounds.maxX - bounds.minX > 0.86 || bounds.maxY - bounds.minY > 0.9;
+  return fillsFrame || touchesHorizontalEdge || touchesVerticalEdge;
+}
+
+function getCameraShakeScore(metrics) {
+  if (metrics.length < 6) return 0;
+  const shoulderWidths = metrics.map((metric) => metric.shoulderWidth).filter((value) => value > 0);
+  const shoulderWidthMean = average(shoulderWidths) || 0;
+  const shoulderWidthJitter = shoulderWidthMean ? standardDeviation(shoulderWidths) / shoulderWidthMean : 0;
+  const ankleCenters = metrics.map((metric) => metric.ankleCenter).filter(Boolean);
+  const ankleJumps = ankleCenters.slice(1).map((point, index) => distance(point, ankleCenters[index]));
+  const averageAnkleJump = average(ankleJumps) || 0;
+
+  return Math.max(shoulderWidthJitter, averageAnkleJump);
+}
+
+function severityFromThresholds(value, lowThreshold, mediumThreshold, highThreshold) {
+  if (value >= highThreshold) return 'high';
+  if (value >= mediumThreshold) return 'medium';
+  if (value >= lowThreshold) return 'low';
+  return 'low';
+}
+
+function getShoulderTurnRatio(backswingWindow, setupShoulderWidth) {
+  const minBackswingShoulderWidth = min(backswingWindow.map((metric) => metric.shoulderWidth));
+  if (!setupShoulderWidth || !minBackswingShoulderWidth) return null;
+  return minBackswingShoulderWidth / setupShoulderWidth;
+}
+
+function rankIssues(issues) {
+  return issues
+    .filter(Boolean)
+    .sort((a, b) => {
+      const severityDifference = (SEVERITY_SCORE[b.severity] || 0) - (SEVERITY_SCORE[a.severity] || 0);
+      if (severityDifference) return severityDifference;
+      return b.confidence - a.confidence;
+    });
+}
+
+function removeDuplicateIssues(issues) {
+  const bestById = new Map();
+
+  for (const issue of issues.filter(Boolean)) {
+    const current = bestById.get(issue.issueId);
+    if (!current || rankIssues([issue, current])[0] === issue) {
+      bestById.set(issue.issueId, issue);
+    }
+  }
+
+  return [...bestById.values()];
+}
+
+function removeDuplicateNotes(notes) {
+  return [...new Map(notes.map((note) => [note.code, note])).values()];
 }
 
 function midpointOfPoints(points) {
@@ -216,6 +388,11 @@ function midpointOfPoints(points) {
     y: average(usable.map((point) => point.y)),
     z: average(usable.map((point) => point.z ?? 0)),
   };
+}
+
+function formatRatio(value) {
+  if (!Number.isFinite(value)) return '0.00';
+  return value.toFixed(2);
 }
 
 function clampConfidence(value) {
