@@ -37,18 +37,6 @@ This repo includes `netlify.toml` configured with:
 - Publish directory: `dist`
 - SPA fallback to `index.html`
 
-
-## GitHub Pages
-
-This repo also includes a GitHub Actions workflow for GitHub Pages deployment:
-
-- Workflow: `.github/workflows/deploy-pages.yml`
-- Trigger: pushes to the `main`, `master`, or `work` branches, plus manual `workflow_dispatch` runs
-- Build command: `npm run build`
-- Published artifact: `dist/`
-
-The Vite `base` option is set to `./` so the production bundle uses relative asset URLs. This lets the same build load correctly from a GitHub Pages project path such as `https://<username>.github.io/Golf/` while preserving root-hosted deployments such as Netlify.
-
 ## Future developer-provided reference swings
 
 Reference comparison is intentionally not user-facing in this MVP. Future reference swings should be committed by a developer under:
