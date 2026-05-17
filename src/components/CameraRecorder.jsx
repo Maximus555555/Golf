@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const MAX_RECORDING_MS = 6000;
-const MAX_RECORDING_SECONDS = Math.ceil(MAX_RECORDING_MS / 1000);
 
 function supportedMimeType() {
-  if (typeof window.MediaRecorder !== 'function') return '';
+  if (!window.MediaRecorder) return '';
   const types = ['video/mp4', 'video/webm;codecs=h264', 'video/webm'];
   return types.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
@@ -20,7 +19,7 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
   const [cameraStatus, setCameraStatus] = useState('idle');
   const [error, setError] = useState('');
   const [isRecording, setIsRecording] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState(MAX_RECORDING_SECONDS);
+  const [secondsLeft, setSecondsLeft] = useState(6);
   const [recordingSupported, setRecordingSupported] = useState(true);
 
   const stopStream = useCallback(() => {
@@ -58,7 +57,7 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
       }
-      setRecordingSupported(typeof window.MediaRecorder === 'function');
+      setRecordingSupported(Boolean(window.MediaRecorder));
       setCameraStatus('ready');
     } catch (cameraError) {
       setCameraStatus('error');
@@ -118,7 +117,7 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
   }, []);
 
   const startRecording = useCallback(() => {
-    if (!streamRef.current || typeof window.MediaRecorder !== 'function') {
+    if (!streamRef.current || !window.MediaRecorder) {
       setRecordingSupported(false);
       setError('Video recording is not supported in this browser. Try the latest iPhone Safari or Chrome.');
       return;
@@ -126,18 +125,9 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
 
     chunksRef.current = [];
     setError('');
-    setSecondsLeft(MAX_RECORDING_SECONDS);
+    setSecondsLeft(6);
     const mimeType = supportedMimeType();
-    const recordingStartedAt = performance.now();
-    let recorder;
-
-    try {
-      recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
-    } catch {
-      setError('Video recording could not be started in this browser. Try the latest iPhone Safari or Chrome.');
-      return;
-    }
-
+    const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
     recorderRef.current = recorder;
 
     recorder.ondataavailable = (event) => {
@@ -145,15 +135,11 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
     };
 
     recorder.onerror = () => {
-      window.clearTimeout(timerRef.current);
-      window.clearInterval(countdownRef.current);
       setIsRecording(false);
       setError('Recording stopped unexpectedly. Please try recording again.');
     };
 
     recorder.onstop = () => {
-      window.clearTimeout(timerRef.current);
-      window.clearInterval(countdownRef.current);
       setIsRecording(false);
       const fallbackType = chunksRef.current.find((chunk) => chunk.type)?.type || '';
       const blob = new Blob(chunksRef.current, { type: mimeType || fallbackType });
@@ -161,19 +147,11 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
         setError('No video was captured. Please try again and keep the camera open until recording stops.');
         return;
       }
-      const durationMs = Math.min(MAX_RECORDING_MS, Math.max(0, Math.round(performance.now() - recordingStartedAt)));
       stopStream();
-      onRecordingComplete({ blob, mimeType: blob.type, durationMs });
+      onRecordingComplete({ blob, mimeType: blob.type, durationMs: MAX_RECORDING_MS });
     };
 
-    try {
-      recorder.start(250);
-    } catch {
-      recorderRef.current = null;
-      setError('Video recording could not be started in this browser. Try the latest iPhone Safari or Chrome.');
-      return;
-    }
-
+    recorder.start(250);
     setIsRecording(true);
     timerRef.current = window.setTimeout(stopRecording, MAX_RECORDING_MS);
     countdownRef.current = window.setInterval(() => {
