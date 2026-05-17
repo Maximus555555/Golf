@@ -209,6 +209,47 @@ button {
   line-height: 1.45;
 }
 
+.results-section {
+  display: grid;
+  gap: 10px;
+}
+
+.section-heading-row {
+  display: grid;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.section-heading-row h3 {
+  margin: 0;
+  color: #173d30;
+  font-size: 1.25rem;
+}
+
+.empty-note,
+.recording-quality-list {
+  margin: 0;
+  border: 1px solid rgba(15, 61, 46, 0.12);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #36584a;
+  line-height: 1.45;
+}
+
+.empty-note {
+  padding: 16px 18px;
+}
+
+.recording-quality-list {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px 16px 38px;
+}
+
+.recording-quality-list li::marker {
+  color: #e1a333;
+}
+
 .camera-card,
 .loading-card,
 .results-header-card,
@@ -375,6 +416,16 @@ button {
   font-size: 1.3rem;
 }
 
+.movement-description {
+  margin: 0 0 14px;
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: #edf7f0;
+  color: #244f3f;
+  font-weight: 750;
+  line-height: 1.42;
+}
+
 .feedback-card dl {
   display: grid;
   gap: 12px;
@@ -428,7 +479,9 @@ button {
   .feedback-card,
   .replay-card,
   .camera-card,
-  .tips-card {
+  .tips-card,
+  .empty-note,
+  .recording-quality-list {
     padding: 24px;
   }
 
