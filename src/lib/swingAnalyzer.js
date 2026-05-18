@@ -1,7 +1,10 @@
 import { SEVERITY_SCORE, getCoachingResponse } from '../data/coachingResponses.js';
 import { convertNormalizedDistanceToRealWorld, estimateCalibrationScale } from './heightCalibration.js';
+import { getStableBodyScale as getStableBodyScaleRobust } from './pose/bodyScale.ts';
+import { filterReliableFrames, rejectOutlierFrames } from './pose/poseQuality.ts';
 import {
   classifySwingFrames,
+  detectSwingPhases,
   getCalibrationFrames,
   getFinishFrames,
   getSetupFrames,
@@ -230,6 +233,7 @@ function makeIssue(issueId, severity, confidence, movementDescription) {
 
 export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetup = { enabled: false }) {
   const phaseDetection = classifySwingFrames(poseTimeline, videoStats, calibrationSetup);
+  const detectedPhases = detectSwingPhases(poseTimeline, { videoStats, calibrationSetup });
   const metrics = phaseDetection.frames.map((frame, index) => ({ ...frameMetrics(frame), frameIndex: index, timestampMs: frame.timestampMs, phase: frame.phase }));
   const totalFramesSampled = videoStats.totalFramesSampled ?? videoStats.totalFrames ?? poseTimeline.length;
   const framesWithAnyPose = videoStats.framesWithAnyPose ?? metrics.filter((metric) => metric.hasAnyLandmark).length;
@@ -247,7 +251,8 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   const failureReason = getFullFailureReason(diagnostics);
 
   if (failureReason) {
-    const failureDiagnostics = { ...diagnostics, phaseDetection: getPhaseDiagnostics(phaseDetection), skippedIssueCategories: getSkippedIssueCategories({}), reason: failureReason };
+    const failureDiagnostics = { ...diagnostics, phaseDetection: getPhaseDiagnostics(phaseDetection),
+    swingPhaseNotes: detectedPhases.notes, skippedIssueCategories: getSkippedIssueCategories({}), reason: failureReason };
     logAnalysisStats(failureDiagnostics);
     return {
       issues: [],
@@ -265,15 +270,19 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   const swingMotionFrameIndexes = new Set(getSwingMotionFrames(phaseDetection.frames).map((frame) => frame.frameIndex));
   const finishFrameIndexes = new Set(getFinishFrames(phaseDetection.frames).map((frame) => frame.frameIndex));
   const swingAnalysisMetrics = metrics.filter((metric) => swingAnalysisFrameIndexes.has(metric.frameIndex));
-  const stableBodyScale = getStableBodyScale(swingAnalysisMetrics.length ? swingAnalysisMetrics : metrics);
+  const scaleResult = getStableBodyScaleRobust(phaseDetection.frames, detectedPhases.addressIndex);
+  const stableBodyScale = { scale: scaleResult.bodyWidth, source: "pose-bodyScale", scaleUnstable: scaleResult.confidence !== "high", clampedToMinimum: false };
   const calculationDiagnostics = {
     stableBodyScale: stableBodyScale.scale,
+    bodyScaleConfidence: scaleResult.confidence,
     stableBodyScaleSource: stableBodyScale.source,
     scaleUnstable: stableBodyScale.scaleUnstable,
     clampedOrDiscarded: stableBodyScale.clampedToMinimum ? ['body-scale-clamped-to-safe-minimum'] : [],
   };
-  const outlierReport = getOutlierReport(swingAnalysisMetrics.length ? swingAnalysisMetrics : metrics, stableBodyScale);
-  const stableMetrics = filterOutlierMetrics(swingAnalysisMetrics.length ? swingAnalysisMetrics : metrics, outlierReport);
+  const outlierRejected = rejectOutlierFrames(phaseDetection.frames, stableBodyScale.scale);
+  const reliability = filterReliableFrames(phaseDetection.frames);
+  const stableMetrics = metrics.filter((m) => !outlierRejected.has(m.frameIndex) && reliability.reliable.some((r) => r.index === m.frameIndex));
+  const outlierReport = { rejectedFrames: Array.from(outlierRejected), removedCount: outlierRejected.size };
   const setupMetrics = stableMetrics.filter((metric) => setupFrameIndexes.has(metric.frameIndex));
   const swingMotionMetrics = stableMetrics.filter((metric) => swingMotionFrameIndexes.has(metric.frameIndex));
   const finishPhaseMetrics = stableMetrics.filter((metric) => finishFrameIndexes.has(metric.frameIndex));
@@ -473,6 +482,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     finishDrift,
     shoulderTurnRatio,
     phaseDetection: getPhaseDiagnostics(phaseDetection),
+    swingPhaseNotes: detectedPhases.notes,
     clampedOrDiscarded: calculationDiagnostics.clampedOrDiscarded,
     reason: 'passed-with-visible-pose-data',
   };
