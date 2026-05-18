@@ -331,6 +331,10 @@ button {
   color: #754c00;
 }
 
+.results-header-card .inline-warning {
+  margin-top: 12px;
+}
+
 .camera-actions {
   display: grid;
   grid-template-columns: 0.8fr 1.2fr;
