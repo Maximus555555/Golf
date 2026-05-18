@@ -765,18 +765,20 @@ button {
   gap: 10px;
 }
 
-.setup-toggle {
+.setup-option-button {
   min-height: 52px;
   border: 1px solid #b8cec1;
   background: #f4f8f6;
   color: #1d4738;
   font-weight: 700;
   -webkit-tap-highlight-color: transparent;
+  border-radius: 12px;
+  padding: 10px 12px;
 }
 
-.setup-toggle--active {
-  border: 2px solid #18814d;
-  background: #def4e7;
-  color: #0f5b35;
-  font-weight: 900;
+.setup-option-button.active {
+  border: 2px solid var(--accent-color, #4ade80);
+  background: rgba(74, 222, 128, 0.16);
+  color: #fff;
+  font-weight: 700;
 }

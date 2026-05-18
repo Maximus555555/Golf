@@ -231,7 +231,20 @@ function makeIssue(issueId, severity, confidence, movementDescription) {
   };
 }
 
+export function getLeadArmSide(handedness) {
+  return handedness === 'left' ? 'right' : 'left';
+}
+
+export function getTargetDirectionSign(handedness, isMirrored) {
+  let sign = handedness === 'left' ? -1 : 1;
+  if (isMirrored) sign *= -1;
+  return sign;
+}
+
 export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetup = { enabled: false }) {
+  const selectedView = calibrationSetup?.view || 'face-on';
+  const handedness = calibrationSetup?.handedness || 'right';
+  const isMirrored = Boolean(calibrationSetup?.isMirrored);
   const phaseDetection = classifySwingFrames(poseTimeline, videoStats, calibrationSetup);
   const detectedPhases = detectSwingPhases(poseTimeline, { videoStats, calibrationSetup });
   const metrics = phaseDetection.frames.map((frame, index) => ({ ...frameMetrics(frame), frameIndex: index, timestampMs: frame.timestampMs, phase: frame.phase }));
@@ -282,7 +295,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   const outlierRejected = rejectOutlierFrames(phaseDetection.frames, stableBodyScale.scale);
   const reliability = filterReliableFrames(phaseDetection.frames);
   const stableMetrics = metrics.filter((m) => !outlierRejected.has(m.frameIndex) && reliability.reliable.some((r) => r.index === m.frameIndex));
-  const outlierReport = { rejectedFrames: Array.from(outlierRejected), removedCount: outlierRejected.size };
+  const outlierReport = { rejectedFrames: Array.from(outlierRejected), removedFrameCount: outlierRejected.size, reasonsByIndex: new Map() };
   const setupMetrics = stableMetrics.filter((metric) => setupFrameIndexes.has(metric.frameIndex));
   const swingMotionMetrics = stableMetrics.filter((metric) => swingMotionFrameIndexes.has(metric.frameIndex));
   const finishPhaseMetrics = stableMetrics.filter((metric) => finishFrameIndexes.has(metric.frameIndex));
@@ -293,7 +306,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   const hipMetrics = motionAndFinishMetrics.filter((metric) => metric.hipCenter);
   const leftLeadArmMetrics = swingMotionMetrics.filter((metric) => Number.isFinite(metric.leftArmAngle));
   const rightLeadArmMetrics = swingMotionMetrics.filter((metric) => Number.isFinite(metric.rightArmAngle));
-  const leadArmSide = rightLeadArmMetrics.length > leftLeadArmMetrics.length ? 'right' : 'left';
+  const leadArmSide = getLeadArmSide(handedness);
   const leadArmMetrics = leadArmSide === 'right' ? rightLeadArmMetrics : leftLeadArmMetrics;
   const finishBalanceMetrics = (finishPhaseMetrics.length ? finishPhaseMetrics : motionAndFinishMetrics).filter((metric) => metric.hipCenter && metric.kneeCenter && (metric.footCenter || metric.ankleCenter));
   const shoulderTurnMetrics = swingMotionMetrics.filter((metric) => metric.shoulderCenter && metric.shoulderWidth > 0);
@@ -305,6 +318,22 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     leadArm: makeAnalyzability(leadArmMetrics, 'A shoulder, elbow, and wrist on the same arm were not visible often enough.'),
     finishBalance: makeAnalyzability(finishBalanceMetrics, 'Hips, knees, and ankles or feet were not visible often enough.'),
   };
+  const recordingAnalyzability = getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, selectedView);
+  if (!recordingAnalyzability.analyzable) {
+    const finalDiagnostics = { ...diagnostics, analyzability, recordingAnalyzability, selectedView, handedness, isMirrored, leadArmSide };
+    return {
+      issues: [],
+      recordingQualityNotes: addCalibrationQualityNotes([
+        ...getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale),
+        { code: 'analysis_unreliable', message: 'The app could not analyze this swing reliably. Try recording again with your full body visible and the phone steady.' },
+      ], calibration),
+      calibration,
+      measurements: createSwingMeasurements({}, stableBodyScale, calibration, calibrationSetup),
+      summary: 'The app could not analyze this swing reliably. Try recording again with your full body visible and the phone steady.',
+      diagnostics: finalDiagnostics,
+      fullFailure: false,
+    };
+  }
   const skippedIssueCategories = getSkippedIssueCategories(analyzability);
   const recordingQualityNotes = addCalibrationQualityNotes(
     phaseDetection.uncertain
@@ -317,20 +346,28 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   let maxHeadMove = null;
   let percentileHeadMove = null;
   if (analyzability.headMovement.analyzable) {
-    const setupHead = midpointOfPoints(setupMetrics.map((metric) => metric.head).filter(Boolean));
     const headScale = stableBodyScale.scale;
-    const headMovementValues = headMovementMetrics.map((metric) => (metric.head && setupHead ? distance(metric.head, setupHead) / headScale : null));
+    const windows = getWindows(headMovementMetrics);
+    const analysisWindow = [...windows.backswing, ...windows.downswing, ...windows.finish];
+    const addressFrame = setupMetrics[setupMetrics.length - 1] || windows.setup[windows.setup.length - 1];
+    const addressChest = addressFrame?.shoulderCenter;
+    const addressHead = addressFrame?.head;
+    const addressResidual = (addressHead && addressChest) ? (addressHead.x - addressChest.x) : null;
+    const headMovementValues = analysisWindow.map((metric) => {
+      if (!Number.isFinite(addressResidual) || !metric.head || !metric.shoulderCenter) return null;
+      return Math.abs((metric.head.x - metric.shoulderCenter.x) - addressResidual) / headScale;
+    });
     const sanitizedHeadMove = getSanitizedRatio(headMovementValues, MOVEMENT_PERCENTILE, 0.8, 1.2, 'head-movement', calculationDiagnostics);
     maxHeadMove = sanitizedHeadMove.rawMax;
     percentileHeadMove = sanitizedHeadMove.used;
-    if (Number.isFinite(percentileHeadMove) && percentileHeadMove > 0.12) {
-      const level = movementLevel(percentileHeadMove, 0.12, 0.22, 0.35);
+    if (Number.isFinite(percentileHeadMove) && percentileHeadMove > 0.1) {
+      const level = movementLevel(percentileHeadMove, 0.1, 0.18, 0.28);
       detectedIssues.push(
         makeIssue(
           'excessive_head_movement',
-          severityFromThresholds(percentileHeadMove, 0.12, 0.22, 0.35),
+          severityFromThresholds(percentileHeadMove, 0.1, 0.18, 0.28),
           clampConfidence((percentileHeadMove - 0.08) / 0.35),
-          `Estimated head movement: ${level}. Your head moved noticeably from its setup position.`,
+          `Estimated head movement: ${level}. Head movement is measured as lateral movement relative to your upper body.`,
         ),
       );
     }
@@ -346,12 +383,14 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     postureRise = postureResult.score;
     if (Number.isFinite(postureRise) && postureRise >= 0.08) {
       const level = movementLevel(postureRise, 0.08, 0.15, 0.25);
+      const postureConfidenceBase = clampConfidence((postureRise - 0.05) / 0.28);
+      const postureConfidence = selectedView === 'face-on' ? Math.max(0.35, postureConfidenceBase * 0.72) : postureConfidenceBase;
       detectedIssues.push(
         makeIssue(
           'posture_loss',
           severityFromThresholds(postureRise, 0.08, 0.15, 0.25),
-          clampConfidence((postureRise - 0.05) / 0.28),
-          `Estimated posture change: ${level}. ${getPostureFeedbackSentence(postureDiagnostics.changeType)}`,
+          postureConfidence,
+          `Estimated posture change: ${level}. ${selectedView === 'face-on' ? 'Posture metric confidence is lower from face-on video. ' : ''}${getPostureFeedbackSentence(postureDiagnostics.changeType)}`,
         ),
       );
     }
@@ -377,26 +416,42 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
         ),
       );
     }
+  } else {
+    recordingQualityNotes.push({ code: 'lead_arm_skipped_selected_side', message: 'Lead arm angle was skipped because the selected lead arm was not tracked reliably.' });
   }
 
   let maxHipSway = null;
   let percentileHipSway = null;
-  if (analyzability.hipSway.analyzable) {
+  let hipSwayFrameRange = null;
+  if (selectedView === 'down-the-line') {
+    recordingQualityNotes.push({ code: 'hip_sway_view_unsupported', message: 'Hip sway is best measured from face-on view.' });
+  } else if (analyzability.hipSway.analyzable) {
     const hipWindows = getWindows(hipMetrics);
     const setupHip = midpointOfPoints(hipWindows.setup.map((metric) => metric.hipCenter));
     const hipScale = stableBodyScale.scale;
-    const hipSwayValues = hipMetrics.map((metric) => (metric.hipCenter && setupHip ? Math.abs(metric.hipCenter.x - setupHip.x) / hipScale : null));
+    const targetDirectionSign = getTargetDirectionSign(handedness, isMirrored);
+    const upperFrameIndex = Number.isFinite(detectedPhases.topIndex) ? detectedPhases.topIndex : Number.POSITIVE_INFINITY;
+    const backswingHipMetrics = hipMetrics.filter((metric) => metric.frameIndex >= (detectedPhases.addressIndex ?? 0) && metric.frameIndex <= upperFrameIndex);
+    hipSwayFrameRange = { from: detectedPhases.addressIndex ?? 0, to: Number.isFinite(detectedPhases.topIndex) ? detectedPhases.topIndex : null };
+    const hipSwayValues = backswingHipMetrics.map((metric) => {
+      if (!metric.hipCenter || !setupHip) return null;
+      const pelvisDeltaX = metric.hipCenter.x - setupHip.x;
+      const awayFromTarget = -pelvisDeltaX * targetDirectionSign;
+      return Math.max(0, awayFromTarget) / hipScale;
+    });
     const sanitizedHipSway = getSanitizedRatio(hipSwayValues, MOVEMENT_PERCENTILE, 0.8, 1.2, 'hip-sway', calculationDiagnostics);
     maxHipSway = sanitizedHipSway.rawMax;
     percentileHipSway = sanitizedHipSway.used;
-    if (Number.isFinite(percentileHipSway) && percentileHipSway > 0.12) {
-      const level = movementLevel(percentileHipSway, 0.12, 0.22, 0.35);
+    if (Number.isFinite(percentileHipSway) && percentileHipSway > 0.15) {
+      const level = movementLevel(percentileHipSway, 0.15, 0.22, 0.32);
       detectedIssues.push(
         makeIssue(
           'hip_sway',
-          severityFromThresholds(percentileHipSway, 0.12, 0.22, 0.35),
+          severityFromThresholds(percentileHipSway, 0.15, 0.22, 0.32),
           clampConfidence((percentileHipSway - 0.08) / 0.35),
-          `Estimated hip sway: ${level}. Your hip center shifted sideways from setup.`,
+          percentileHipSway > 0.22
+            ? 'Your hips swayed too far away from the target in the backswing. That can make recentering harder.'
+            : 'Your hips drifted a little too far away from the target in the backswing.',
         ),
       );
     }
@@ -428,17 +483,19 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   }
 
   let shoulderTurnRatio = null;
+  let shoulderTurnProxyUsed = false;
   if (analyzability.shoulderTurn.analyzable) {
     const shoulderWindows = getWindows(shoulderTurnMetrics);
     const shoulderTurnSetupWidth = median(shoulderWindows.setup.map((metric) => metric.shoulderWidth)) || stableBodyScale.scale;
     shoulderTurnRatio = getShoulderTurnRatio(shoulderWindows.backswing, shoulderTurnSetupWidth);
+    shoulderTurnProxyUsed = true;
     if (Number.isFinite(shoulderTurnRatio) && shoulderTurnRatio > 0.82) {
       detectedIssues.push(
         makeIssue(
           'weak_shoulder_turn',
           severityFromThresholds(shoulderTurnRatio, 0.82, 0.88, 0.95),
-          clampConfidence((shoulderTurnRatio - 0.76) / 0.24),
-          `Your visible shoulder line changed only slightly in the backswing, staying near ${Math.round(shoulderTurnRatio * 100)}% of its setup width.`,
+          0.42,
+          `Shoulder turn angle was unavailable, so a 2D ratio proxy was used. Visible shoulder line stayed near ${Math.round(shoulderTurnRatio * 100)}% of setup width.`,
         ),
       );
     }
@@ -465,7 +522,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     },
     stableBodyScale,
     outlierFramesRemoved: outlierReport.removedFrameCount,
-    outlierReasons: Object.fromEntries([...outlierReport.reasonsByIndex.entries()]),
+    outlierReasons: outlierReport.reasonsByIndex ? Object.fromEntries([...outlierReport.reasonsByIndex.entries()]) : {},
     analyzability,
     analyzedIssueCategories,
     skippedIssueCategories,
@@ -479,8 +536,18 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     percentileLeadArmAngle,
     rawMaxHipSway: maxHipSway,
     percentileHipSway,
+    hipSwayFrameRange,
     finishDrift,
     shoulderTurnRatio,
+    selectedView,
+    handedness,
+    isMirrored,
+    leadArmSide,
+    headMovementDefinition: 'lateral_residual_relative_to_chest',
+    hipSwayDefinition: 'backswing_away_from_target',
+    shoulderTurnProxyUsed,
+    postureViewConfidence: selectedView === 'face-on' ? 'lower_from_face_on' : 'normal',
+    recordingAnalyzability,
     phaseDetection: getPhaseDiagnostics(phaseDetection),
     swingPhaseNotes: detectedPhases.notes,
     clampedOrDiscarded: calculationDiagnostics.clampedOrDiscarded,
@@ -1030,6 +1097,26 @@ function makeRecordingNote(code) {
   return {
     code,
     message: RECORDING_QUALITY_WARNINGS[code],
+  };
+}
+
+function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, selectedView) {
+  const notes = [];
+  if (diagnostics.framesWithAnyPose < 30) notes.push('Too few frames with pose landmarks.');
+  if (diagnostics.usableFramePercentage < 0.5) notes.push('Usable frame percentage is below 50%.');
+  if (stableBodyScale.scaleUnstable && diagnostics.framesWithAnyPose < 45) notes.push('Body scale confidence is low with limited reliable frames.');
+  if (!Number.isFinite(detectedPhases.addressIndex)) notes.push('Address phase was not detected.');
+  if (!Number.isFinite(detectedPhases.topIndex)) notes.push('Top of backswing was not detected.');
+  if (detectedPhases.confidence === 'low' && diagnostics.framesWithAnyPose < 50) notes.push('Phase confidence is low with limited swing frames.');
+  if (!analyzability.shoulderTurn?.analyzable && !analyzability.posture?.analyzable) notes.push('Shoulders were visible too rarely for key metrics.');
+  if (selectedView !== 'face-on') notes.push('Some lateral metrics are less reliable from down-the-line.');
+
+  const analyzable = notes.length === 0;
+  return {
+    analyzable,
+    qualityLevel: analyzable ? (diagnostics.usableFramePercentage > 0.7 ? 'good' : 'usable') : 'poor',
+    reason: analyzable ? null : 'insufficient_pose_quality',
+    notes,
   };
 }
 
