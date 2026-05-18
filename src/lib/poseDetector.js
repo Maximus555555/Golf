@@ -86,24 +86,30 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       const timestampMs = Math.round(time * 1000);
       const frameSource = drawVideoFrameToCanvas(video, frameCanvas, frameCtx) || video;
       let landmarks = null;
+      let frameHadRawLandmarks = false;
+      let frameHadPersonLikePose = false;
+      let frameUsedFallback = false;
       try {
         landmarks = await detector.detectForVideo(frameSource, timestampMs);
       } catch (error) {
         if (!firstDetectionError) firstDetectionError = error instanceof Error ? error.message : String(error);
       }
-      if (landmarks?.length) framesWithRawLandmarks += 1;
-      if (hasAnyPersonLikePose(landmarks)) framesWithAnyPersonLikePose += 1;
+      frameHadRawLandmarks = Boolean(landmarks?.length);
+      frameHadPersonLikePose = hasAnyPersonLikePose(landmarks);
       const shouldRetryFallback = !landmarks?.length || !hasAnyVisibleLandmark(landmarks) || !hasAnyPersonLikePose(landmarks);
       if (shouldRetryFallback) {
         if (!fallbackDetector) fallbackDetector = await createFallbackPoseDetector();
         const fallbackLandmarks = await fallbackDetector.detectForVideo(frameSource, timestampMs);
-        landmarks = fallbackLandmarks?.length ? fallbackLandmarks : landmarks;
-        if (landmarks?.length) {
-          framesUsingFallback += 1;
-          framesWithRawLandmarks += 1;
-          if (hasAnyPersonLikePose(landmarks)) framesWithAnyPersonLikePose += 1;
+        if (fallbackLandmarks?.length) {
+          frameUsedFallback = true;
+          landmarks = fallbackLandmarks;
         }
+        frameHadRawLandmarks = frameHadRawLandmarks || Boolean(landmarks?.length);
+        frameHadPersonLikePose = frameHadPersonLikePose || hasAnyPersonLikePose(landmarks);
       }
+      if (frameHadRawLandmarks) framesWithRawLandmarks += 1;
+      if (frameHadPersonLikePose) framesWithAnyPersonLikePose += 1;
+      if (frameUsedFallback) framesUsingFallback += 1;
 
       if (landmarks?.length && hasAnyVisibleLandmark(landmarks)) {
         framesWithAnyPose += 1;
@@ -395,11 +401,13 @@ function seekVideo(video, time) {
 
 async function waitForVideoFrame(video) {
   if ('requestVideoFrameCallback' in video) {
-    await new Promise((resolve) => {
-      video.requestVideoFrameCallback(() => resolve());
-    });
+    await Promise.race([
+      new Promise((resolve) => video.requestVideoFrameCallback(() => resolve())),
+      new Promise((resolve) => window.setTimeout(resolve, 120)),
+    ]);
     return;
   }
+
   await new Promise((resolve) => window.setTimeout(resolve, 80));
 }
 
