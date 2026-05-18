@@ -328,6 +328,17 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
               </button>
             </div>
           </div>
+          <div className="setup-option-group">
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={Boolean(captureSetup?.isMirrored)}
+                onChange={(event) => onCaptureSetupChange({ ...captureSetup, isMirrored: event.target.checked })}
+              />
+              <span>Mirrored selfie view</span>
+            </label>
+            <p className="setup-helper-text">Turn this on if the preview looks mirrored like a selfie camera.</p>
+          </div>
           {cameraSwitchError && <p className="error-message">{cameraSwitchError}</p>}
         </div>
 

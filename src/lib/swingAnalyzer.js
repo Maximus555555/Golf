@@ -244,7 +244,8 @@ export function getTargetDirectionSign(handedness, isMirrored) {
 export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetup = { enabled: false }) {
   const selectedView = calibrationSetup?.view || 'face-on';
   const handedness = calibrationSetup?.handedness || 'right';
-  const isMirrored = Boolean(calibrationSetup?.isMirrored);
+  const hasExplicitMirrorSelection = typeof calibrationSetup?.isMirrored === 'boolean';
+  const isMirrored = hasExplicitMirrorSelection ? calibrationSetup.isMirrored : false;
   const phaseDetection = classifySwingFrames(poseTimeline, videoStats, calibrationSetup);
   const detectedPhases = detectSwingPhases(poseTimeline, { videoStats, calibrationSetup });
   const metrics = phaseDetection.frames.map((frame, index) => ({ ...frameMetrics(frame), frameIndex: index, timestampMs: frame.timestampMs, phase: frame.phase }));
@@ -322,7 +323,13 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     leadArm: makeAnalyzability(leadArmMetrics, 'A shoulder, elbow, and wrist on the same arm were not visible often enough.'),
     finishBalance: makeAnalyzability(finishBalanceMetrics, 'Hips, knees, and ankles or feet were not visible often enough.'),
   };
-  const recordingAnalyzability = getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, selectedView);
+  let shoulderTurnProxyUsed = false;
+  const recordingAnalyzability = getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, {
+    selectedView,
+    isMirrored,
+    hasExplicitMirrorSelection,
+    shoulderTurnProxyUsed,
+  });
   if (!recordingAnalyzability.analyzable) {
     const finalDiagnostics = { ...diagnostics, analyzability, recordingAnalyzability, selectedView, handedness, isMirrored, leadArmSide };
     return {
@@ -399,8 +406,10 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
         makeIssue(
           'posture_loss',
           severityFromThresholds(postureRise, 0.08, 0.15, 0.25),
-          postureConfidence,
-          `Estimated posture change: ${level}. ${selectedView === 'face-on' ? 'Posture metric confidence is lower from face-on video. ' : ''}${getPostureFeedbackSentence(postureDiagnostics.changeType)}`,
+          postureConfidence * (phaseConfidence === 'low' ? 0.72 : phaseConfidence === 'medium' ? 0.9 : 1),
+          phaseConfidence === 'low'
+            ? `Estimated posture change: ${level}. The app detected signs of posture change during the swing. ${getPostureFeedbackSentence(postureDiagnostics.changeType)}`
+            : `Estimated posture change: ${level}. ${selectedView === 'face-on' ? 'Posture metric confidence is lower from face-on video. ' : ''}${getPostureFeedbackSentence(postureDiagnostics.changeType)}`,
         ),
       );
     }
@@ -422,7 +431,9 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
           'lead_arm_collapse',
           severityFromThresholds(180 - percentileLeadArmAngle, 25, 40, 60),
           clampConfidence((155 - percentileLeadArmAngle) / 50) * (phaseConfidence === 'low' ? 0.6 : phaseConfidence === 'medium' ? 0.82 : 1),
-          `Estimated lead arm angle: about ${Math.round(percentileLeadArmAngle)}°. Your lead arm appeared to bend near the top of the backswing.`,
+          phaseConfidence === 'low'
+            ? `Estimated lead arm angle: about ${Math.round(percentileLeadArmAngle)}°. The app detected signs of lead-arm bend near the top of the backswing.`
+            : `Estimated lead arm angle: about ${Math.round(percentileLeadArmAngle)}°. Your lead arm appeared to bend near the top of the backswing.`,
         ),
       );
     }
@@ -459,9 +470,13 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
           'hip_sway',
           severityFromThresholds(percentileHipSway, 0.15, 0.22, 0.32),
           clampConfidence((percentileHipSway - 0.08) / 0.35) * (phaseConfidence === 'low' ? 0.6 : phaseConfidence === 'medium' ? 0.82 : 1),
-          percentileHipSway > 0.22
-            ? 'Your hips swayed too far away from the target in the backswing. That can make recentering harder.'
-            : 'Your hips drifted a little too far away from the target in the backswing.',
+          phaseConfidence === 'low'
+            ? (percentileHipSway > 0.22
+              ? 'The app detected signs of hip sway away from the target in the backswing. This may indicate recentering could be harder.'
+              : 'The app detected signs your hips may have drifted away from the target in the backswing.')
+            : (percentileHipSway > 0.22
+              ? 'Your hips swayed too far away from the target in the backswing. That can make recentering harder.'
+              : 'Your hips drifted a little too far away from the target in the backswing.'),
         ),
       );
     }
@@ -493,7 +508,6 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   }
 
   let shoulderTurnRatio = null;
-  let shoulderTurnProxyUsed = false;
   if (analyzability.shoulderTurn.analyzable) {
     const shoulderWindows = getWindows(shoulderTurnMetrics);
     const shoulderTurnSetupWidth = median(shoulderWindows.setup.map((metric) => metric.shoulderWidth)) || stableBodyScale.scale;
@@ -504,14 +518,23 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
         makeIssue(
           'weak_shoulder_turn',
           severityFromThresholds(shoulderTurnRatio, 0.82, 0.88, 0.95),
-          0.42 * (phaseConfidence === 'low' ? 0.6 : phaseConfidence === 'medium' ? 0.82 : 1),
-          `Shoulder turn angle was unavailable, so a 2D ratio proxy was used. Visible shoulder line stayed near ${Math.round(shoulderTurnRatio * 100)}% of setup width.`,
+          (selectedView === 'down-the-line' ? 0.2 : 0.42) * (phaseConfidence === 'low' ? 0.6 : phaseConfidence === 'medium' ? 0.82 : 1),
+          phaseConfidence === 'low'
+            ? `Shoulder turn angle was unavailable, so a 2D ratio proxy was used. The app detected signs shoulder turn stayed near ${Math.round(shoulderTurnRatio * 100)}% of setup width.`
+            : `Shoulder turn angle was unavailable, so a 2D ratio proxy was used. Visible shoulder line stayed near ${Math.round(shoulderTurnRatio * 100)}% of setup width.`,
         ),
       );
     }
   }
 
-  const topIssues = rankIssues(removeDuplicateIssues(detectedIssues)).slice(0, 3);
+  const topIssues = rankIssues(removeDuplicateIssues(detectedIssues), phaseConfidence).slice(0, 3);
+  recordingAnalyzability.cautionNotes = getRecordingCautionNotes({
+    selectedView,
+    analyzability,
+    detectedPhases,
+    hasExplicitMirrorSelection,
+    shoulderTurnProxyUsed,
+  });
   const analyzedIssueCategories = getAnalyzedIssueCategories(analyzability);
   const movementMeasurements = {
     headMovement: { ratio: percentileHeadMove, normalizedDistance: multiplyFinite(percentileHeadMove, stableBodyScale.scale), analyzability: analyzability.headMovement },
@@ -1117,7 +1140,8 @@ function makeRecordingNote(code) {
   };
 }
 
-function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, selectedView) {
+function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, context = {}) {
+  const { selectedView } = context;
   const blockingReasons = [];
   const cautionNotes = [];
   if (diagnostics.framesWithAnyPose < 30) blockingReasons.push('Too few frames with pose landmarks.');
@@ -1129,12 +1153,6 @@ function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, s
   const analyzableMetricCount = Object.values(analyzability || {}).filter((item) => item?.analyzable).length;
   if (analyzableMetricCount < 2) blockingReasons.push('Too few major metrics were analyzable from this recording.');
 
-  if (selectedView === 'down-the-line') cautionNotes.push('Some lateral metrics are less reliable from down-the-line view.');
-  if (selectedView === 'face-on') cautionNotes.push('Posture metric confidence is lower from face-on video.');
-  cautionNotes.push('Shoulder turn uses a 2D proxy instead of a full turn angle.');
-  cautionNotes.push('Mirror status was not confirmed; left/right movement assumptions may be less reliable.');
-  if (detectedPhases.confidence !== 'high') cautionNotes.push('Swing phase detection confidence was not high, so timing-based feedback may be less reliable.');
-
   const analyzable = blockingReasons.length === 0;
   return {
     analyzable,
@@ -1143,6 +1161,20 @@ function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, s
     blockingReasons,
     cautionNotes,
   };
+}
+
+function getRecordingCautionNotes({ selectedView, analyzability, detectedPhases, hasExplicitMirrorSelection, shoulderTurnProxyUsed }) {
+  const cautionNotes = [];
+  if (selectedView === 'down-the-line') cautionNotes.push('Some lateral metrics are less reliable from down-the-line view.');
+  if (selectedView === 'face-on' && analyzability?.posture?.analyzable) cautionNotes.push('Posture metric confidence is lower from face-on video.');
+  if (shoulderTurnProxyUsed) cautionNotes.push('Shoulder turn uses a 2D proxy instead of a full turn angle.');
+  const directionSensitiveEvaluated = analyzability?.hipSway?.analyzable;
+  if (directionSensitiveEvaluated && !hasExplicitMirrorSelection) {
+    cautionNotes.push('Mirror status was not confirmed; left/right movement assumptions may be less reliable.');
+  }
+  if (detectedPhases.confidence === 'medium') cautionNotes.push('Swing phase detection confidence was not high, so timing-based feedback may be less reliable.');
+  if (detectedPhases.confidence === 'low') cautionNotes.push('Swing phase detection confidence was low, so timing-based feedback may be less reliable.');
+  return cautionNotes;
 }
 
 function isComfortablyInFrame(bounds) {
@@ -1244,10 +1276,18 @@ function getShoulderTurnRatio(backswingWindow, setupShoulderWidth) {
   return minBackswingShoulderWidth / setupShoulderWidth;
 }
 
-function rankIssues(issues) {
+function rankIssues(issues, phaseConfidence = 'high') {
   return issues
     .filter(Boolean)
     .sort((a, b) => {
+      if (phaseConfidence === 'low') {
+        const aTiming = ['lead_arm_collapse', 'hip_sway', 'weak_shoulder_turn', 'posture_loss'].includes(a.issueId);
+        const bTiming = ['lead_arm_collapse', 'hip_sway', 'weak_shoulder_turn', 'posture_loss'].includes(b.issueId);
+        if (aTiming !== bTiming) {
+          const similarSeverity = Math.abs((SEVERITY_SCORE[b.severity] || 0) - (SEVERITY_SCORE[a.severity] || 0)) <= 1;
+          if (similarSeverity) return aTiming ? 1 : -1;
+        }
+      }
       const severityDifference = (SEVERITY_SCORE[b.severity] || 0) - (SEVERITY_SCORE[a.severity] || 0);
       if (severityDifference) return severityDifference;
       return b.confidence - a.confidence;
