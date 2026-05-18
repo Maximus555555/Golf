@@ -43,10 +43,11 @@ export function midpoint(a?: PoseLandmark | null, b?: PoseLandmark | null) {
 export function averagePoints(points: Array<PoseLandmark | null | undefined>) {
   const usable = points.filter((point): point is PoseLandmark => Boolean(point) && Number.isFinite(point?.x) && Number.isFinite(point?.y));
   if (!usable.length) return null;
+  const pointsWithZ = usable.filter((point) => Number.isFinite(point.z));
   return {
     x: usable.reduce((sum, point) => sum + point.x, 0) / usable.length,
     y: usable.reduce((sum, point) => sum + point.y, 0) / usable.length,
-    z: usable.some((point) => Number.isFinite(point.z)) ? usable.reduce((sum, point) => sum + (point.z ?? 0), 0) / usable.length : undefined,
+    z: pointsWithZ.length ? pointsWithZ.reduce((sum, point) => sum + point.z!, 0) / pointsWithZ.length : undefined,
   };
 }
 
@@ -100,7 +101,8 @@ export function computeHeadMovement(timeline: PoseFrame[], addressIndex: number)
   const addressHead = headCenter(addressFrame);
   if (!bodyWidth || !addressHead) return emptyMetric(config.units, config.confidence, 'Head movement could not be measured from the available setup landmarks.');
 
-  const shifts = timeline.map((frame) => headCenter(frame)).filter(Boolean).map((point) => Math.abs(point!.x - addressHead.x));
+  const swingFrames = timeline.slice(addressIndex);
+  const shifts = swingFrames.map((frame) => headCenter(frame)).filter(Boolean).map((point) => Math.abs(point!.x - addressHead.x));
   if (!shifts.length) return emptyMetric(config.units, config.confidence, 'Head landmarks were unavailable during the swing.');
   return { value: Math.max(...shifts) / bodyWidth, units: config.units, confidence: config.confidence, supported: true };
 }
@@ -173,7 +175,8 @@ export function computeShoulderTurnAngleTopPreferred(topFrame?: PoseFrame, addre
   if (!Number.isFinite(topYaw) || !Number.isFinite(addressYaw)) {
     return { value: null, units: config.units, confidence: config.confidence, supported: false, notes: ['Shoulder turn angle was unavailable, so a 2D ratio proxy was used.'] };
   }
-  let delta = Math.abs(((topYaw! - addressYaw! + Math.PI) % (2 * Math.PI)) - Math.PI);
+  const normalizedDelta = (((topYaw! - addressYaw! + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+  const delta = Math.abs(normalizedDelta - Math.PI);
   return { value: (delta * 180) / Math.PI, units: config.units, confidence: config.confidence, supported: true };
 }
 
@@ -237,15 +240,26 @@ function withRating(metricKey: string, result: MetricResult, rating: MetricRatin
   return { ...result, rating, feedback: rating ? getMetricFeedback(metricKey, rating, result.notes ?? []) : null };
 }
 
+function clampFrameIndex(index: number, fallback: number, timelineLength: number) {
+  if (!timelineLength) return 0;
+  const safeIndex = Number.isInteger(index) && index >= 0 ? index : fallback;
+  return Math.max(0, Math.min(timelineLength - 1, safeIndex));
+}
+
 export function resolveSwingEvents(timeline: PoseFrame[], events?: Partial<SwingEvents>): SwingEvents {
   const normalized = timeline.map((frame) => `${frame.phase ?? ''} ${frame.event ?? ''} ${frame.name ?? ''}`.toLowerCase());
-  const addressIndex = events?.addressIndex ?? normalized.findIndex((label) => /address|setup|start/.test(label));
-  const topIndex = events?.topIndex ?? normalized.findIndex((label) => /top|top-of-backswing|top_of_backswing/.test(label));
-  const impactIndex = events?.impactIndex ?? normalized.findIndex((label) => /impact/.test(label));
+  const detectedAddressIndex = normalized.findIndex((label) => /address|setup|start/.test(label));
+  const detectedTopIndex = normalized.findIndex((label) => /top|top-of-backswing|top_of_backswing/.test(label));
+  const detectedImpactIndex = normalized.findIndex((label) => /impact/.test(label));
+  const defaultTopIndex = Math.max(0, Math.min(timeline.length - 1, Math.round((timeline.length - 1) / 2)));
+  const rawAddressIndex = events?.addressIndex ?? detectedAddressIndex;
+  const rawTopIndex = events?.topIndex ?? detectedTopIndex;
+  const rawImpactIndex = events?.impactIndex ?? detectedImpactIndex;
+
   return {
-    addressIndex: addressIndex >= 0 ? addressIndex : 0,
-    topIndex: topIndex >= 0 ? topIndex : Math.max(0, Math.min(timeline.length - 1, Math.round((timeline.length - 1) / 2))),
-    impactIndex: impactIndex >= 0 ? impactIndex : undefined,
+    addressIndex: clampFrameIndex(rawAddressIndex, 0, timeline.length),
+    topIndex: clampFrameIndex(rawTopIndex, defaultTopIndex, timeline.length),
+    impactIndex: rawImpactIndex >= 0 && timeline.length ? clampFrameIndex(rawImpactIndex, rawImpactIndex, timeline.length) : undefined,
   };
 }
 

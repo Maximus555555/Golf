@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   analyzeGolfSwingMetrics,
+  averagePoints,
   computeHeadMovement,
   computeHipSway,
   computeLeadArmAngleAtTop,
@@ -8,6 +9,7 @@ import {
   computeShoulderTurnAngleTopPreferred,
   computeShoulderTurnRatio,
   evaluateMetric,
+  resolveSwingEvents,
 } from '../golfMetrics';
 import type { PoseFrame, PoseLandmark } from '../landmarkAdapters';
 
@@ -113,6 +115,20 @@ function shoulderAngleFrames(angleDeg: number) {
 }
 
 describe('golf metric threshold checks', () => {
+
+  it('averages z coordinates only from landmarks that include depth', () => {
+    expect(averagePoints([lm(0, 0, 4), lm(2, 2), lm(4, 4, 8)])).toEqual({ x: 2, y: 2, z: 6 });
+  });
+
+  it('measures head movement from address onward and ignores pre-address calibration movement', () => {
+    const timeline = [
+      frame({ nose: lm(1.5, 0.2), leftEar: lm(1.45, 0.2), rightEar: lm(1.55, 0.2) }),
+      frame(),
+      frame({ nose: lm(0.58, 0.2), leftEar: lm(0.53, 0.2), rightEar: lm(0.63, 0.2) }),
+    ];
+    expect(computeHeadMovement(timeline, 1).value).toBeCloseTo(0.08);
+  });
+
   it('classifies head movement as good, acceptable, and problematic', () => {
     expect(evaluateMetric(computeHeadMovement(headShiftTimeline(0.08), 0).value, maxConfig)).toBe('good');
     expect(evaluateMetric(computeHeadMovement(headShiftTimeline(0.14), 0).value, maxConfig)).toBe('acceptable');
@@ -152,6 +168,21 @@ describe('golf metric threshold checks', () => {
     expect(evaluateMetric(computeShoulderTurnAngleTopPreferred(good.top, good.address).value, angleRangeConfig)).toBe('good');
     expect(evaluateMetric(computeShoulderTurnAngleTopPreferred(acceptable.top, acceptable.address).value, angleRangeConfig)).toBe('acceptable');
     expect(evaluateMetric(computeShoulderTurnAngleTopPreferred(problematic.top, problematic.address).value, angleRangeConfig)).toBe('problematic');
+  });
+
+
+  it('normalizes shoulder turn across the +/-180 degree yaw boundary', () => {
+    const address = frame({}, { leftShoulder: lm(0, 0, 0), rightShoulder: lm(Math.cos((170 * Math.PI) / 180), 0, Math.sin((170 * Math.PI) / 180)) });
+    const top = frame({}, { leftShoulder: lm(0, 0, 0), rightShoulder: lm(Math.cos((-170 * Math.PI) / 180), 0, Math.sin((-170 * Math.PI) / 180)) });
+    expect(computeShoulderTurnAngleTopPreferred(top, address).value).toBeCloseTo(20);
+  });
+
+  it('clamps explicit swing event indexes to available frames', () => {
+    expect(resolveSwingEvents([frame(), frame()], { addressIndex: 99, topIndex: -5, impactIndex: 7 })).toEqual({
+      addressIndex: 1,
+      topIndex: 1,
+      impactIndex: 1,
+    });
   });
 
   it('computes hip sway directly and includes proxy feedback when 3D shoulder angle is unavailable', () => {
