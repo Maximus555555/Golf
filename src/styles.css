@@ -777,8 +777,14 @@ button {
 }
 
 .setup-option-button.active {
-  border: 2px solid var(--accent-color, #4ade80);
-  background: rgba(74, 222, 128, 0.16);
-  color: #fff;
-  font-weight: 700;
+  border: 2px solid #18814d;
+  background: #dff3e7;
+  color: #0f5b35;
+  font-weight: 900;
+  box-shadow: 0 0 0 2px rgba(24, 129, 77, 0.12);
+}
+
+.setup-option-button:focus-visible {
+  outline: 3px solid rgba(24, 129, 77, 0.35);
+  outline-offset: 2px;
 }

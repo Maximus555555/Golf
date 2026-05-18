@@ -32,6 +32,7 @@ const DEBUG_LANDMARKS = [
 ];
 
 let landmarkerPromise;
+let fallbackLandmarkerPromise;
 
 export async function createPoseDetector() {
   if (!landmarkerPromise) {
@@ -88,6 +89,8 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
     let framesWherePoseDetectionRan = 0;
     let framesWithAnyPose = 0;
     const recordingQualityNotes = [];
+    let fallbackDetector = null;
+    let fallbackNoteAdded = false;
 
     for (const [index, time] of sampleTimes.entries()) {
       await seekVideo(video, time);
@@ -95,9 +98,12 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       const timestampMs = Math.round(time * 1000);
       let landmarks = await detector.detectForVideo(video, timestampMs);
       if (!landmarks?.length) {
-        const fallbackDetector = await createPoseDetectorWithConfidence(FALLBACK_POSE_CONFIDENCE);
+        if (!fallbackDetector) fallbackDetector = await createFallbackPoseDetector();
         landmarks = await fallbackDetector.detectForVideo(video, timestampMs);
-        if (landmarks?.length) recordingQualityNotes.push('Pose tracking confidence was reduced to detect the body; results may be less reliable.');
+        if (landmarks?.length && !fallbackNoteAdded) {
+          recordingQualityNotes.push('Pose tracking confidence was reduced to detect the body; results may be less reliable.');
+          fallbackNoteAdded = true;
+        }
       }
 
       if (landmarks?.length && hasAnyVisibleLandmark(landmarks)) {
@@ -136,6 +142,13 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
 }
 
 
+
+async function createFallbackPoseDetector() {
+  if (!fallbackLandmarkerPromise) {
+    fallbackLandmarkerPromise = createPoseDetectorWithConfidence(FALLBACK_POSE_CONFIDENCE);
+  }
+  return fallbackLandmarkerPromise;
+}
 
 async function createPoseDetectorWithConfidence(confidence) {
   const vision = await FilesetResolver.forVisionTasks(WASM_BASE);

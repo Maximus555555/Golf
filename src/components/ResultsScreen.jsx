@@ -39,6 +39,9 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
         <p className="eyebrow">Swing results</p>
         <h2>{resultsTitle}</h2>
         <p>{analysis?.summary}</p>
+        <p className="measurement-warning">
+          SwingFix uses phone-video pose tracking, so feedback is an estimate. For best results, record from a stable, well-lit angle with your full body visible.
+        </p>
         {analysis?.fullFailure && (
           <p className="inline-warning">
             We could not read enough body landmarks from this recording. Try brighter light, a steady camera, and keeping more of your body in view.
