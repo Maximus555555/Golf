@@ -9,6 +9,9 @@ export default function FeedbackCard({ feedback, index }) {
         </div>
       </div>
       {feedback.movementDescription && <p className="movement-description">{feedback.movementDescription}</p>}
+      {typeof feedback.confidence === 'number' && feedback.confidence < 0.6 && (
+        <p className="movement-description">This may indicate a swing pattern. Try recording again to confirm.</p>
+      )}
       <dl>
         <div>
           <dt>What happened</dt>

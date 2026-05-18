@@ -337,7 +337,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
               />
               <span>Mirrored selfie view</span>
             </label>
-            <p className="setup-helper-text">Turn this on if the preview looks mirrored like a selfie camera.</p>
+            <p className="setup-helper-text">Only turn this on if the recorded video looks mirrored like a selfie. This affects left/right movement checks such as hip sway.</p>
           </div>
           {cameraSwitchError && <p className="error-message">{cameraSwitchError}</p>}
         </div>

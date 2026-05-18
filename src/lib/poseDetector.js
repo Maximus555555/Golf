@@ -1,7 +1,7 @@
 import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 
-const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
-const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
+const WASM_BASE = import.meta.env.VITE_MEDIAPIPE_WASM_BASE || 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
+const MODEL_URL = import.meta.env.VITE_MEDIAPIPE_MODEL_URL || 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
 const MAX_ANALYSIS_SECONDS = 6;
 const TARGET_SAMPLE_FPS = 15;
 const MIN_SAMPLED_FRAMES = 45;
@@ -90,7 +90,7 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
     let framesWithAnyPose = 0;
     const recordingQualityNotes = [];
     let fallbackDetector = null;
-    let fallbackNoteAdded = false;
+    let framesUsingFallback = 0;
 
     for (const [index, time] of sampleTimes.entries()) {
       await seekVideo(video, time);
@@ -100,9 +100,8 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       if (!landmarks?.length) {
         if (!fallbackDetector) fallbackDetector = await createFallbackPoseDetector();
         landmarks = await fallbackDetector.detectForVideo(video, timestampMs);
-        if (landmarks?.length && !fallbackNoteAdded) {
-          recordingQualityNotes.push('Pose tracking confidence was reduced to detect the body; results may be less reliable.');
-          fallbackNoteAdded = true;
+        if (landmarks?.length) {
+          framesUsingFallback += 1;
         }
       }
 
@@ -117,6 +116,15 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       onProgress?.((index + 1) / sampleTimes.length);
     }
 
+
+    const fallbackFrameRatio = framesWherePoseDetectionRan ? framesUsingFallback / framesWherePoseDetectionRan : 0;
+    if (framesUsingFallback > 0) {
+      recordingQualityNotes.push('Pose tracking confidence was reduced to detect the body; results may be less reliable.');
+      if (fallbackFrameRatio >= CONFIDENCE_RETRY_FAILURE_RATIO) {
+        recordingQualityNotes.push('Pose tracking needed lower confidence for many frames, so results may be less reliable.');
+      }
+    }
+
     const stats = {
       totalFramesSampled: sampleTimes.length,
       framesWherePoseDetectionRan,
@@ -126,6 +134,8 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       mostOftenMissingLandmarks: getMostMissingLandmarks(missingLandmarkCounts),
       videoDimensions: { width: video.videoWidth || null, height: video.videoHeight || null },
       finalReason: 'pose-detection-complete',
+      fallbackFrameRatio,
+      framesUsingFallback,
       recordingQualityNotes: [...new Set(recordingQualityNotes)],
     };
     logPoseDetectionStats(stats);
