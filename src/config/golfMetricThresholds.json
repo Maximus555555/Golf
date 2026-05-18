@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "normalization": {
+    "bodyWidth": "setupShoulderWidth"
+  },
+  "metrics": {
+    "headMovement": {
+      "goodMax": 0.10,
+      "acceptableMax": 0.18,
+      "units": "bodyWidthRatio",
+      "confidence": "medium",
+      "sourceStatus": "source-backed-normalized"
+    },
+    "postureChange": {
+      "goodMax": 0.10,
+      "acceptableMax": 0.20,
+      "units": "compositeScore",
+      "confidence": "low",
+      "sourceStatus": "derived-unspecified-in-primary-sources"
+    },
+    "hipSway": {
+      "goodMax": 0.15,
+      "acceptableMax": 0.22,
+      "units": "bodyWidthRatio",
+      "confidence": "medium-low",
+      "sourceStatus": "source-informed-normalized"
+    },
+    "leadArmAngleTop": {
+      "goodMin": 165,
+      "acceptableMin": 150,
+      "units": "degrees",
+      "confidence": "medium",
+      "sourceStatus": "source-informed"
+    },
+    "shoulderTurnRatio": {
+      "goodMax": 0.70,
+      "acceptableMax": 0.85,
+      "units": "ratio",
+      "confidence": "low",
+      "sourceStatus": "derived-unspecified-in-primary-sources"
+    },
+    "shoulderTurnAngleTopPreferred": {
+      "goodMin": 90,
+      "goodMax": 105,
+      "acceptableMin": 80,
+      "acceptableMax": 115,
+      "units": "degrees",
+      "confidence": "medium",
+      "sourceStatus": "source-backed-angle-proxy"
+    }
+  }
+}
