@@ -9,16 +9,28 @@
 5. Wait for the **Deploy to GitHub Pages** workflow to finish.
 6. Open your Pages URL (for this repo: `https://Maximus555555.github.io/Golf/`).
 
-## External resources used
+## External resources
 
-GitHub Pages hosting is static. Camera access works over HTTPS, and analysis runs in the browser. The app still needs access to MediaPipe model/runtime files unless those files are self-hosted.
+SwingFix is still a browser-only app hosted as static files on GitHub Pages:
 
-- SwingFix does **not** use paid APIs.
-- SwingFix does **not** send video to OpenAI or a backend server.
-- By default, SwingFix downloads MediaPipe WASM/runtime and pose model files from external URLs.
-- To self-host these assets, place MediaPipe files in `/public/mediapipe/` and set:
-  - `VITE_MEDIAPIPE_WASM_BASE=/Golf/mediapipe/wasm` (or `/mediapipe/wasm` outside GitHub Pages base path)
-  - `VITE_MEDIAPIPE_MODEL_URL=/Golf/mediapipe/pose_landmarker_lite.task`
+- No OpenAI API.
+- No backend/server-side processing.
+- No paid APIs.
+- No YouTube integration.
+- No scraping.
+- No database.
+
+By default, SwingFix downloads MediaPipe runtime/model assets from external URLs:
+
+- `VITE_MEDIAPIPE_WASM_BASE` (MediaPipe WASM/runtime files)
+- `VITE_MEDIAPIPE_MODEL_URL` (pose model file)
+
+After those files load, analysis runs locally in the browser on-device.
+
+If you want full self-hosting, place MediaPipe files under `/public/mediapipe/` and set Vite env vars to local paths, for example:
+
+- `VITE_MEDIAPIPE_WASM_BASE=/Golf/mediapipe/wasm` (or `/mediapipe/wasm` outside the GitHub Pages base path)
+- `VITE_MEDIAPIPE_MODEL_URL=/Golf/mediapipe/pose_landmarker_lite.task`
 
 ## GitHub Pages smoke-check checklist
 

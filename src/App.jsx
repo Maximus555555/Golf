@@ -5,6 +5,7 @@ import AnalysisScreen from './components/AnalysisScreen.jsx';
 import ResultsScreen from './components/ResultsScreen.jsx';
 import { analyzeVideoBlob } from './lib/poseDetector.js';
 import { analyzeSwing } from './lib/swingAnalyzer.js';
+import { safeGetBooleanLocalStorage, safeGetLocalStorage, safeSetLocalStorage } from './lib/storage.js';
 
 const SCREEN = {
   landing: 'landing',
@@ -21,9 +22,10 @@ export default function App() {
   const [analysisMessage, setAnalysisMessage] = useState('Preparing your swing analysis...');
   const [heightCalibration, setHeightCalibration] = useState({ enabled: false, preferredUnit: 'in' });
   const [captureSetup, setCaptureSetup] = useState(() => ({
-    view: window.localStorage.getItem('swingfix-view') || 'face-on',
-    handedness: window.localStorage.getItem('swingfix-handedness') || 'right',
-    isMirrored: window.localStorage.getItem('swingfix-is-mirrored') === 'true',
+    view: safeGetLocalStorage('swingfix-view', 'face-on'),
+    handedness: safeGetLocalStorage('swingfix-handedness', 'right'),
+    isMirrored: safeGetBooleanLocalStorage('swingfix-is-mirrored', false),
+    mirrorSettingConfirmed: safeGetBooleanLocalStorage('swingfix-mirror-confirmed', false),
   }));
 
   const [replayUrl, setReplayUrl] = useState(null);
@@ -47,9 +49,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem('swingfix-view', captureSetup.view);
-    window.localStorage.setItem('swingfix-handedness', captureSetup.handedness);
-    window.localStorage.setItem('swingfix-is-mirrored', String(Boolean(captureSetup.isMirrored)));
+    safeSetLocalStorage('swingfix-view', captureSetup.view);
+    safeSetLocalStorage('swingfix-handedness', captureSetup.handedness);
+    safeSetLocalStorage('swingfix-is-mirrored', String(Boolean(captureSetup.isMirrored)));
+    safeSetLocalStorage('swingfix-mirror-confirmed', String(Boolean(captureSetup.mirrorSettingConfirmed)));
   }, [captureSetup]);
 
   const handleRecordingComplete = useCallback(async (recordedSwing) => {

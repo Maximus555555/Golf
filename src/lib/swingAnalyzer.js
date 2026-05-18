@@ -244,8 +244,8 @@ export function getTargetDirectionSign(handedness, isMirrored) {
 export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetup = { enabled: false }) {
   const selectedView = calibrationSetup?.view || 'face-on';
   const handedness = calibrationSetup?.handedness || 'right';
-  const hasExplicitMirrorSelection = typeof calibrationSetup?.isMirrored === 'boolean';
-  const isMirrored = hasExplicitMirrorSelection ? calibrationSetup.isMirrored : false;
+  const mirrorSettingConfirmed = Boolean(calibrationSetup?.mirrorSettingConfirmed);
+  const isMirrored = Boolean(calibrationSetup?.isMirrored);
   const phaseDetection = classifySwingFrames(poseTimeline, videoStats, calibrationSetup);
   const detectedPhases = detectSwingPhases(poseTimeline, { videoStats, calibrationSetup });
   const metrics = phaseDetection.frames.map((frame, index) => ({ ...frameMetrics(frame), frameIndex: index, timestampMs: frame.timestampMs, phase: frame.phase }));
@@ -324,12 +324,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     finishBalance: makeAnalyzability(finishBalanceMetrics, 'Hips, knees, and ankles or feet were not visible often enough.'),
   };
   let shoulderTurnProxyUsed = false;
-  const recordingAnalyzability = getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, {
-    selectedView,
-    isMirrored,
-    hasExplicitMirrorSelection,
-    shoulderTurnProxyUsed,
-  });
+  const recordingAnalyzability = getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale);
   if (!recordingAnalyzability.analyzable) {
     const finalDiagnostics = { ...diagnostics, analyzability, recordingAnalyzability, selectedView, handedness, isMirrored, leadArmSide };
     return {
@@ -447,12 +442,6 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   if (selectedView === 'down-the-line') {
     recordingQualityNotes.push({ code: 'hip_sway_view_unsupported', message: 'Hip sway is best measured from face-on view.' });
   } else if (analyzability.hipSway.analyzable) {
-    recordingQualityNotes.push({
-      code: isMirrored ? 'mirror_setting_used' : 'mirror_setting_reminder',
-      message: isMirrored
-        ? 'Mirrored selfie view was used for left/right movement checks.'
-        : 'If you used a mirrored front-camera view, turn on Mirrored selfie view before recording.',
-    });
     const hipWindows = getWindows(hipMetrics);
     const setupHip = midpointOfPoints(hipWindows.setup.map((metric) => metric.hipCenter));
     const hipScale = stableBodyScale.scale;
@@ -538,7 +527,8 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     selectedView,
     analyzability,
     detectedPhases,
-    hasExplicitMirrorSelection,
+    mirrorSettingConfirmed,
+    isMirrored,
     shoulderTurnProxyUsed,
   });
   const analyzedIssueCategories = getAnalyzedIssueCategories(analyzability);
@@ -581,6 +571,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     selectedView,
     handedness,
     isMirrored,
+    mirrorSettingConfirmed,
     leadArmSide,
     headMovementDefinition: 'lateral_residual_relative_to_chest',
     hipSwayDefinition: 'backswing_away_from_target',
@@ -894,134 +885,6 @@ function getAnalyzedIssueCategories(analyzability) {
     .map(([category]) => ({ category, label: labels[category] || category }));
 }
 
-function getStableBodyScale(metrics) {
-  const setupMetrics = getWindows(metrics).setup;
-  const setupScale = getScaleFromCandidates(setupMetrics, 'setup');
-  const fallbackScale = getScaleFromCandidates(metrics, 'all-frames');
-  const selected = setupScale.value ? setupScale : fallbackScale;
-  const unclampedScale = selected.value || MIN_STABLE_BODY_SCALE;
-  const scale = Math.max(MIN_STABLE_BODY_SCALE, unclampedScale);
-  const allFrameScale = fallbackScale.value || scale;
-  const setupToAllDifference = selected.value && allFrameScale ? Math.abs(selected.value - allFrameScale) / Math.max(selected.value, allFrameScale) : 0;
-
-  return {
-    scale,
-    unclampedScale,
-    source: selected.source || 'minimum-safe-scale',
-    usedSetupFrames: selected.frameSet === 'setup',
-    clampedToMinimum: scale !== unclampedScale,
-    scaleUnstable: setupToAllDifference > 0.35 || setupScale.unstable || fallbackScale.unstable || scale !== unclampedScale,
-    setupMedianShoulderWidth: setupScale.shoulderMedian,
-    setupMedianHipWidth: setupScale.hipMedian,
-    setupMedianBodyBounds: setupScale.boundsMedian,
-    allFrameMedianScale: allFrameScale,
-  };
-}
-
-function getScaleFromCandidates(metrics, frameSet) {
-  const shoulderValues = cleanScaleValues(metrics.map((metric) => metric.shoulderWidth));
-  const hipValues = cleanScaleValues(metrics.map((metric) => metric.hipWidth));
-  const boundsValues = cleanScaleValues(metrics.map((metric) => getBodyBoundsScale(metric.bounds)));
-  const stanceValues = cleanScaleValues(metrics.map((metric) => metric.stanceWidth));
-  const candidates = [
-    { source: `${frameSet}-shoulder-width`, values: shoulderValues, value: median(shoulderValues) },
-    { source: `${frameSet}-hip-width`, values: hipValues, value: median(hipValues) },
-    { source: `${frameSet}-visible-body-bounds`, values: boundsValues, value: median(boundsValues) },
-    { source: `${frameSet}-stance-width`, values: stanceValues, value: median(stanceValues) },
-  ];
-  const selected = candidates.find((candidate) => Number.isFinite(candidate.value));
-
-  return {
-    frameSet,
-    source: selected?.source,
-    value: selected?.value ?? null,
-    shoulderMedian: median(shoulderValues),
-    hipMedian: median(hipValues),
-    boundsMedian: median(boundsValues),
-    unstable: candidates.some((candidate) => isScaleSeriesUnstable(candidate.values)),
-  };
-}
-
-function cleanScaleValues(values) {
-  return values.filter((value) => Number.isFinite(value) && value >= 0.04 && value <= 0.9);
-}
-
-function getBodyBoundsScale(bounds) {
-  if (!bounds) return null;
-  const width = bounds.maxX - bounds.minX;
-  const height = bounds.maxY - bounds.minY;
-  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
-  return Math.max(width, height * 0.35);
-}
-
-function isScaleSeriesUnstable(values) {
-  if (values.length < 5) return false;
-  const middle = median(values);
-  if (!middle) return false;
-  const spread = percentile(values, 90) - percentile(values, 10);
-  return spread / middle > 0.45;
-}
-
-function getMovementScale(metrics) {
-  return getStableBodyScale(metrics).scale;
-}
-
-function getAverageBoundsWidth(metrics) {
-  return average(metrics.map((metric) => getBodyBoundsScale(metric.bounds)).filter((value) => value > 0));
-}
-
-
-function getOutlierReport(metrics, stableScaleDiagnostics) {
-  const setupMetrics = getWindows(metrics).setup;
-  const setupShoulderWidth = median(cleanScaleValues(setupMetrics.map((metric) => metric.shoulderWidth)));
-  const setupHipWidth = median(cleanScaleValues(setupMetrics.map((metric) => metric.hipWidth)));
-  const badIndexes = new Set();
-  const reasonsByIndex = new Map();
-  let previousHead = null;
-
-  metrics.forEach((metric, index) => {
-    const frameKey = Number.isFinite(metric.frameIndex) ? metric.frameIndex : index;
-    const reasons = [];
-    if (setupShoulderWidth && metric.shoulderWidth && Math.abs(metric.shoulderWidth - setupShoulderWidth) / setupShoulderWidth > OUTLIER_WIDTH_CHANGE_LIMIT) {
-      reasons.push('shoulder-width-jump');
-    }
-    if (setupHipWidth && metric.hipWidth && Math.abs(metric.hipWidth - setupHipWidth) / setupHipWidth > OUTLIER_WIDTH_CHANGE_LIMIT) {
-      reasons.push('hip-width-jump');
-    }
-    if (metric.head && previousHead) {
-      const headJump = distance(metric.head, previousHead);
-      if (headJump > Math.max(0.25, stableScaleDiagnostics.scale * 1.15)) {
-        reasons.push('head-position-jump');
-      }
-    }
-    if (metric.bounds && !areLandmarksWithinLooseBounds(metric.visiblePoints)) {
-      reasons.push('landmark-outside-normalized-range');
-    }
-    if (metric.visibleRequiredRatio < 0.35) {
-      reasons.push('low-key-landmark-visibility');
-    }
-
-    if (reasons.length) {
-      badIndexes.add(frameKey);
-      reasonsByIndex.set(frameKey, reasons);
-    } else if (metric.head) {
-      previousHead = metric.head;
-    }
-  });
-
-  return {
-    badIndexes,
-    reasonsByIndex,
-    removedFrameCount: badIndexes.size,
-    setupShoulderWidth,
-    setupHipWidth,
-  };
-}
-
-function filterOutlierMetrics(metrics, outlierReport, requiredPredicate = () => true) {
-  return metrics.filter((metric) => requiredPredicate(metric) && !outlierReport.badIndexes.has(metric.frameIndex));
-}
-
 function areLandmarksWithinLooseBounds(points = []) {
   return points.every((landmark) => landmark.x >= -0.2 && landmark.x <= 1.2 && landmark.y >= -0.2 && landmark.y <= 1.2);
 }
@@ -1175,10 +1038,8 @@ function makeRecordingNote(code) {
   };
 }
 
-function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, context = {}) {
-  const { selectedView } = context;
+function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale) {
   const blockingReasons = [];
-  const cautionNotes = [];
   if (diagnostics.framesWithAnyPose < 30) blockingReasons.push('Too few frames with pose landmarks.');
   if (diagnostics.usableFramePercentage < 0.5) blockingReasons.push('Usable frame percentage is below 50%.');
   if (stableBodyScale.scaleUnstable && diagnostics.framesWithAnyPose < 45) blockingReasons.push('Body scale confidence is low with limited reliable frames.');
@@ -1194,18 +1055,19 @@ function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, s
     qualityLevel: analyzable ? (diagnostics.usableFramePercentage > 0.7 ? 'good' : 'usable') : 'poor',
     reason: analyzable ? null : 'insufficient_pose_quality',
     blockingReasons,
-    cautionNotes,
   };
 }
 
-function getRecordingCautionNotes({ selectedView, analyzability, detectedPhases, hasExplicitMirrorSelection, shoulderTurnProxyUsed }) {
+function getRecordingCautionNotes({ selectedView, analyzability, detectedPhases, mirrorSettingConfirmed, isMirrored, shoulderTurnProxyUsed }) {
   const cautionNotes = [];
   if (selectedView === 'down-the-line') cautionNotes.push('Some lateral metrics are less reliable from down-the-line view.');
   if (selectedView === 'face-on' && analyzability?.posture?.analyzable) cautionNotes.push('Posture metric confidence is lower from face-on video.');
   if (shoulderTurnProxyUsed) cautionNotes.push('Shoulder turn uses a 2D proxy instead of a full turn angle.');
-  const directionSensitiveEvaluated = analyzability?.hipSway?.analyzable;
-  if (directionSensitiveEvaluated && !hasExplicitMirrorSelection) {
-    cautionNotes.push('Mirror status was not confirmed; left/right movement assumptions may be less reliable.');
+  const directionSensitiveEvaluated = selectedView === 'face-on' && analyzability?.hipSway?.analyzable;
+  if (directionSensitiveEvaluated && !mirrorSettingConfirmed) {
+    cautionNotes.push('Mirror setting was not confirmed. If you used a mirrored selfie/front-camera view, turn on Mirrored selfie view before recording.');
+  } else if (directionSensitiveEvaluated && mirrorSettingConfirmed && isMirrored) {
+    cautionNotes.push('Mirrored selfie view was used for left/right movement checks.');
   }
   if (detectedPhases.confidence === 'medium') cautionNotes.push('Swing phase detection confidence was not high, so timing-based feedback may be less reliable.');
   if (detectedPhases.confidence === 'low') cautionNotes.push('Swing phase detection confidence was low, so timing-based feedback may be less reliable.');
