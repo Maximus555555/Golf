@@ -788,3 +788,16 @@ button {
   outline: 3px solid rgba(24, 129, 77, 0.35);
   outline-offset: 2px;
 }
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.setup-helper-text {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  opacity: 0.85;
+}

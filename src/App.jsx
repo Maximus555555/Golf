@@ -23,7 +23,7 @@ export default function App() {
   const [captureSetup, setCaptureSetup] = useState(() => ({
     view: window.localStorage.getItem('swingfix-view') || 'face-on',
     handedness: window.localStorage.getItem('swingfix-handedness') || 'right',
-    isMirrored: undefined,
+    isMirrored: window.localStorage.getItem('swingfix-is-mirrored') === 'true',
   }));
 
   const [replayUrl, setReplayUrl] = useState(null);
@@ -49,6 +49,7 @@ export default function App() {
   useEffect(() => {
     window.localStorage.setItem('swingfix-view', captureSetup.view);
     window.localStorage.setItem('swingfix-handedness', captureSetup.handedness);
+    window.localStorage.setItem('swingfix-is-mirrored', String(Boolean(captureSetup.isMirrored)));
   }, [captureSetup]);
 
   const handleRecordingComplete = useCallback(async (recordedSwing) => {
