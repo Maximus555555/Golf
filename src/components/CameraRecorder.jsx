@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { safeGetLocalStorage, safeSetLocalStorage } from '../lib/storage.js';
 
 const MAX_RECORDING_MS = 6000;
 const PRE_RECORDING_COUNTDOWN_STEPS = ['Ready', 'Set', 'Go!'];
@@ -30,7 +31,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
   const [recordingSupported, setRecordingSupported] = useState(true);
   const [recordingPhasePrompt, setRecordingPhasePrompt] = useState('');
   const [cameraOptions, setCameraOptions] = useState([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState(() => window.localStorage.getItem('swingfix-camera-device-id') || '');
+  const [selectedDeviceId, setSelectedDeviceId] = useState(() => safeGetLocalStorage('swingfix-camera-device-id', ''));
   const [cameraSwitchError, setCameraSwitchError] = useState('');
 
   const stopStream = useCallback(() => {
@@ -227,7 +228,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
   const handleCameraChange = useCallback((event) => {
     const nextId = event.target.value;
     setSelectedDeviceId(nextId);
-    window.localStorage.setItem('swingfix-camera-device-id', nextId);
+    safeSetLocalStorage('swingfix-camera-device-id', nextId);
     setCameraSwitchError('');
   }, []);
 
@@ -333,7 +334,11 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
               <input
                 type="checkbox"
                 checked={Boolean(captureSetup?.isMirrored)}
-                onChange={(event) => onCaptureSetupChange({ ...captureSetup, isMirrored: event.target.checked })}
+                onChange={(event) => onCaptureSetupChange({
+                  ...captureSetup,
+                  isMirrored: event.target.checked,
+                  mirrorSettingConfirmed: true,
+                })}
               />
               <span>Mirrored selfie view</span>
             </label>

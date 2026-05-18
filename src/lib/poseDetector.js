@@ -154,6 +154,7 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
 
 
 async function createFallbackPoseDetector() {
+  // Fallback detector intentionally uses CPU because it is a lower-confidence retry path and avoids repeated GPU initialization issues on mobile browsers.
   if (!fallbackLandmarkerPromise) {
     fallbackLandmarkerPromise = createPoseDetectorWithConfidence(FALLBACK_POSE_CONFIDENCE);
   }
@@ -238,6 +239,8 @@ function logPoseDetectionStats(stats) {
     visibleLandmarkFrequencySummary: stats.visibleLandmarkFrequency,
     mostOftenMissingLandmarks: stats.mostOftenMissingLandmarks,
     finalReason: stats.finalReason,
+    framesUsingFallback: stats.framesUsingFallback,
+    fallbackFrameRatio: stats.fallbackFrameRatio,
   });
 }
 
