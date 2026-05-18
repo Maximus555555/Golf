@@ -1,6 +1,17 @@
 import { useMemo, useState } from 'react';
 import { normalizeHeightInput } from '../lib/heightCalibration.js';
 
+const INCHES_TO_CENTIMETERS = 2.54;
+
+function parseHeightPart(value) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatHeightValue(value) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 export default function LandingScreen({ onStart }) {
   const [heightUnit, setHeightUnit] = useState('imperial');
   const [feet, setFeet] = useState('5');
@@ -12,6 +23,22 @@ export default function LandingScreen({ onStart }) {
     () => normalizeHeightInput({ unit: heightUnit, feet, inches, centimeters }),
     [centimeters, feet, heightUnit, inches],
   );
+
+  const handleUnitChange = (nextUnit) => {
+    if (nextUnit === heightUnit) return;
+
+    if (nextUnit === 'cm') {
+      const totalInches = parseHeightPart(feet) * 12 + parseHeightPart(inches);
+      setCentimeters(formatHeightValue(Math.round(totalInches * INCHES_TO_CENTIMETERS * 10) / 10));
+    } else {
+      const totalInches = Math.round(parseHeightPart(centimeters) / INCHES_TO_CENTIMETERS * 10) / 10;
+      setFeet(String(Math.floor(totalInches / 12)));
+      setInches(formatHeightValue(Math.round((totalInches % 12) * 10) / 10));
+    }
+
+    setHeightUnit(nextUnit);
+    setHeightError('');
+  };
 
   const handleUseCalibration = () => {
     const normalized = normalizeHeightInput({ unit: heightUnit, feet, inches, centimeters });
@@ -31,16 +58,16 @@ export default function LandingScreen({ onStart }) {
   return (
     <section className="screen landing-screen">
       <div className="hero-card">
-        <span className="pill">No login · No backend · 6 seconds</span>
+        <span className="pill">No login · No backend · 10 seconds</span>
         <h2>Optional measurement calibration</h2>
         <p>Enter your height to help SwingFix estimate real-world movement, like how many inches your head or hips moved. This is optional.</p>
 
         <div className="height-calibration-panel" aria-label="Optional height calibration">
           <div className="unit-toggle" role="group" aria-label="Height units">
-            <button className={heightUnit === 'imperial' ? 'unit-option selected' : 'unit-option'} type="button" onClick={() => setHeightUnit('imperial')}>
+            <button className={heightUnit === 'imperial' ? 'unit-option selected' : 'unit-option'} type="button" onClick={() => handleUnitChange('imperial')}>
               Feet + inches
             </button>
-            <button className={heightUnit === 'cm' ? 'unit-option selected' : 'unit-option'} type="button" onClick={() => setHeightUnit('cm')}>
+            <button className={heightUnit === 'cm' ? 'unit-option selected' : 'unit-option'} type="button" onClick={() => handleUnitChange('cm')}>
               Centimeters
             </button>
           </div>
