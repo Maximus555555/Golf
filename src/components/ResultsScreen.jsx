@@ -107,12 +107,28 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
               <dd>{diagnostics.outlierFramesRemoved ?? 0}</dd>
             </div>
             <div>
+              <dt>Calibration frames excluded</dt>
+              <dd>{diagnostics.phaseDetection?.calibrationFramesExcluded ? 'yes' : 'no'}</dd>
+            </div>
+            <div>
+              <dt>Swing start detected</dt>
+              <dd>{formatFrameTime(diagnostics.phaseDetection?.swingStartFrame, diagnostics.phaseDetection?.swingStartTimeMs)}</dd>
+            </div>
+            <div>
+              <dt>Setup frames used</dt>
+              <dd>{formatRange(diagnostics.phaseDetection?.setupFrameRange)}</dd>
+            </div>
+            <div>
+              <dt>Swing frames used</dt>
+              <dd>{formatRange(diagnostics.phaseDetection?.swingFrameRange)}</dd>
+            </div>
+            <div>
               <dt>Head movement</dt>
               <dd>raw {diagnostics.rawMaxHeadMove?.toFixed?.(2) ?? 'n/a'} / used {diagnostics.percentileHeadMove?.toFixed?.(2) ?? 'n/a'}</dd>
             </div>
             <div>
-              <dt>Posture rise</dt>
-              <dd>raw {diagnostics.rawMaxPostureRise?.toFixed?.(2) ?? 'n/a'} / used {diagnostics.percentilePostureRise?.toFixed?.(2) ?? 'n/a'}</dd>
+              <dt>Posture change</dt>
+              <dd>raw {diagnostics.rawMaxPostureRise?.toFixed?.(2) ?? 'n/a'} / score {diagnostics.postureChangeScore?.toFixed?.(2) ?? 'n/a'} / {diagnostics.postureDiagnostics?.changeType ?? diagnostics.postureDiagnostics?.reason ?? 'n/a'}</dd>
             </div>
             <div>
               <dt>Lead arm angle</dt>
@@ -176,4 +192,15 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
 function capitalize(value) {
   if (!value) return 'Skipped';
   return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function formatRange(range) {
+  if (!range) return 'n/a';
+  return `frames ${range.start}–${range.end} (${range.count})`;
+}
+
+function formatFrameTime(frame, timeMs) {
+  if (frame === null || frame === undefined) return 'n/a';
+  const timeLabel = Number.isFinite(timeMs) ? ` / ${(timeMs / 1000).toFixed(1)}s` : '';
+  return `frame ${frame}${timeLabel}`;
 }

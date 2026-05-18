@@ -22,6 +22,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
   const [isRecording, setIsRecording] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(MAX_RECORDING_MS / 1000);
   const [recordingSupported, setRecordingSupported] = useState(true);
+  const [recordingPhasePrompt, setRecordingPhasePrompt] = useState('');
 
   const stopStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -135,6 +136,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     chunksRef.current = [];
     setError('');
     setSecondsLeft(MAX_RECORDING_MS / 1000);
+    setRecordingPhasePrompt(heightCalibration?.enabled ? 'Stand still for calibration' : 'Get ready');
     const mimeType = supportedMimeType();
     let recorder;
     try {
@@ -154,11 +156,13 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
       window.clearTimeout(timerRef.current);
       window.clearInterval(countdownRef.current);
       setIsRecording(false);
+      setRecordingPhasePrompt('');
       setError('Recording stopped unexpectedly. Please try recording again.');
     };
 
     recorder.onstop = () => {
       setIsRecording(false);
+      setRecordingPhasePrompt('');
       const fallbackType = chunksRef.current.find((chunk) => chunk.type)?.type || '';
       const blob = new Blob(chunksRef.current, { type: mimeType || fallbackType });
       if (!blob.size) {
@@ -178,10 +182,21 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     }
     setIsRecording(true);
     timerRef.current = window.setTimeout(stopRecording, MAX_RECORDING_MS);
+    const recordingStartedAt = Date.now();
     countdownRef.current = window.setInterval(() => {
-      setSecondsLeft((value) => Math.max(0, value - 1));
-    }, 1000);
-  }, [onRecordingComplete, stopRecording, stopStream]);
+      const elapsedMs = Date.now() - recordingStartedAt;
+      setSecondsLeft(Math.max(0, Math.ceil((MAX_RECORDING_MS - elapsedMs) / 1000)));
+      if (heightCalibration?.enabled) {
+        if (elapsedMs < 1800) setRecordingPhasePrompt('Stand still for calibration');
+        else if (elapsedMs < 2500) setRecordingPhasePrompt('Get ready');
+        else setRecordingPhasePrompt('Swing');
+      } else if (elapsedMs < 750) {
+        setRecordingPhasePrompt('Get ready');
+      } else {
+        setRecordingPhasePrompt('Swing');
+      }
+    }, 250);
+  }, [heightCalibration?.enabled, onRecordingComplete, stopRecording, stopStream]);
 
   return (
     <section className="screen camera-screen">
@@ -190,6 +205,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
           <video ref={videoRef} className="camera-preview" muted playsInline autoPlay />
           <canvas ref={canvasRef} className="pose-overlay" aria-hidden="true" />
           {isRecording && <div className="recording-badge">Recording · {secondsLeft}s</div>}
+          {isRecording && recordingPhasePrompt && <div className="recording-phase-prompt">{recordingPhasePrompt}</div>}
         </div>
 
         {heightCalibration?.enabled && (
