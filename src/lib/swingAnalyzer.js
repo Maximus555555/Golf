@@ -270,7 +270,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     logAnalysisStats(failureDiagnostics);
     return {
       issues: [],
-      recordingQualityNotes: addCalibrationQualityNotes([makeRecordingNote('too_few_usable_frames')], calibration),
+      recordingQualityNotes: mergeRecordingQualityNotes(addCalibrationQualityNotes([makeRecordingNote('too_few_usable_frames')], calibration), normalizeVideoStatsNotes(videoStats)),
       measurements: createSwingMeasurements({}, null, calibration, calibrationSetup),
       calibration,
       summary: 'The recording quality was too limited for reliable swing feedback. Please record again before using the swing notes.',
@@ -334,10 +334,10 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     const finalDiagnostics = { ...diagnostics, analyzability, recordingAnalyzability, selectedView, handedness, isMirrored, leadArmSide };
     return {
       issues: [],
-      recordingQualityNotes: addCalibrationQualityNotes([
+      recordingQualityNotes: mergeRecordingQualityNotes(addCalibrationQualityNotes([
         ...getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale),
         { code: 'analysis_unreliable', message: 'The app could not analyze this swing reliably. Try recording again with your full body visible and the phone steady.' },
-      ], calibration),
+      ], calibration), normalizeVideoStatsNotes(videoStats)),
       calibration,
       measurements: createSwingMeasurements({}, stableBodyScale, calibration, calibrationSetup),
       summary: 'The app could not analyze this swing reliably. Try recording again with your full body visible and the phone steady.',
@@ -347,12 +347,12 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   }
   const skippedIssueCategories = getSkippedIssueCategories(analyzability);
   const phaseConfidence = detectedPhases.confidence || 'medium';
-  const recordingQualityNotes = addCalibrationQualityNotes(
+  const recordingQualityNotes = mergeRecordingQualityNotes(addCalibrationQualityNotes(
     phaseDetection.uncertain
       ? [...getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale), makeRecordingNote('phase_detection_uncertain')]
       : getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale),
     calibration,
-  );
+  ), normalizeVideoStatsNotes(videoStats));
   if (phaseConfidence === 'low') {
     recordingQualityNotes.push({ code: 'phase_confidence_low', message: 'Swing phase detection confidence was low, so timing-based feedback may be less reliable.' });
   } else if (phaseConfidence === 'medium') {
@@ -447,6 +447,12 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   if (selectedView === 'down-the-line') {
     recordingQualityNotes.push({ code: 'hip_sway_view_unsupported', message: 'Hip sway is best measured from face-on view.' });
   } else if (analyzability.hipSway.analyzable) {
+    recordingQualityNotes.push({
+      code: isMirrored ? 'mirror_setting_used' : 'mirror_setting_reminder',
+      message: isMirrored
+        ? 'Mirrored selfie view was used for left/right movement checks.'
+        : 'If you used a mirrored front-camera view, turn on Mirrored selfie view before recording.',
+    });
     const hipWindows = getWindows(hipMetrics);
     const setupHip = midpointOfPoints(hipWindows.setup.map((metric) => metric.hipCenter));
     const hipScale = stableBodyScale.scale;
@@ -1131,6 +1137,35 @@ function getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierRe
   }
 
   return removeDuplicateNotes(notes);
+}
+
+
+function normalizeVideoStatsNotes(videoStats) {
+  return (videoStats?.recordingQualityNotes || []).map((note, index) => {
+    if (typeof note === 'string') {
+      return { code: `pose_detector_${index}`, message: note };
+    }
+    if (note?.message) {
+      return { code: note.code || `pose_detector_${index}`, message: note.message };
+    }
+    return null;
+  }).filter(Boolean);
+}
+
+function mergeRecordingQualityNotes(...noteGroups) {
+  const merged = [];
+  const seen = new Set();
+  noteGroups.flat().filter(Boolean).forEach((note, index) => {
+    const code = note.code || `note_${index}`;
+    const message = note.message || '';
+    const key = `${code}::${message}`;
+    const messageKey = `msg::${message}`;
+    if (!message || seen.has(key) || seen.has(messageKey)) return;
+    seen.add(key);
+    seen.add(messageKey);
+    merged.push({ code, message });
+  });
+  return merged;
 }
 
 function makeRecordingNote(code) {
