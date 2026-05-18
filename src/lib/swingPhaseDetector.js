@@ -93,17 +93,49 @@ export function classifySwingFrames(poseTimeline = [], videoStats = {}, calibrat
 
 export function detectSwingPhases(poseTimeline = [], options = {}) {
   const classified = classifySwingFrames(poseTimeline, options.videoStats || {}, options.calibrationSetup || {});
-  const setup = getSetupFrames(classified.frames);
-  const swing = getSwingMotionFrames(classified.frames);
-  const finish = getFinishFrames(classified.frames);
-  const addressIndex = setup.length ? setup[Math.max(0, setup.length - 1)].frameIndex : null;
-  const takeawayStartIndex = swing.length ? swing[0].frameIndex : null;
-  const topIndex = swing.length ? swing[Math.floor(swing.length * 0.55)].frameIndex : null;
-  const impactIndex = swing.length ? swing[Math.floor(swing.length * 0.8)].frameIndex : null;
-  const finishIndex = finish.length ? finish[0].frameIndex : null;
-  const confidence = classified.uncertain ? 'low' : swing.length >= 8 ? 'high' : 'medium';
+  const frames = classified.frames;
   const notes = [];
-  if (classified.uncertain) notes.push('Swing phase detection confidence is low; fallback analysis window used.');
+  const minStartIndex = boundaryIndexForElapsedMs(frames, classified.timing, 650) + 1;
+  const movementScores = getMovementScores(frames, classified.timing);
+  const threshold = getMotionThreshold(movementScores.slice(Math.max(0, minStartIndex)));
+  const takeawayStartIndex = findSwingStartFrame(movementScores, Math.max(0, minStartIndex), threshold);
+
+  const stableBeforeTakeaway = [];
+  for (let i = Math.max(0, minStartIndex); i < takeawayStartIndex; i += 1) {
+    const shoulderStable = hasPair(frames[i], LANDMARK.leftShoulder, LANDMARK.rightShoulder);
+    const hipStable = hasPair(frames[i], LANDMARK.leftHip, LANDMARK.rightHip);
+    if (shoulderStable && hipStable && (movementScores[i] || 0) < threshold) stableBeforeTakeaway.push(i);
+  }
+  const addressIndex = stableBeforeTakeaway.length ? stableBeforeTakeaway[stableBeforeTakeaway.length - 1] : Math.max(0, takeawayStartIndex - 1);
+
+  const swingEnd = findSwingEndFrame(movementScores, takeawayStartIndex, threshold, frames.length);
+  let topIndex = null;
+  let bestScore = -Infinity;
+  for (let i = takeawayStartIndex + 1; i < swingEnd - 2; i += 1) {
+    const lw = visiblePoint(frames[i], LANDMARK.leftWrist); const rw = visiblePoint(frames[i], LANDMARK.rightWrist);
+    const shoulderW = distance(visiblePoint(frames[i], LANDMARK.leftShoulder), visiblePoint(frames[i], LANDMARK.rightShoulder));
+    const wristX = median([lw?.x, rw?.x]);
+    const prev = median([visiblePoint(frames[i-1], LANDMARK.leftWrist)?.x, visiblePoint(frames[i-1], LANDMARK.rightWrist)?.x]);
+    const next = median([visiblePoint(frames[i+1], LANDMARK.leftWrist)?.x, visiblePoint(frames[i+1], LANDMARK.rightWrist)?.x]);
+    const reversal = Number.isFinite(prev)&&Number.isFinite(next)&&Number.isFinite(wristX) ? Math.sign(wristX-prev)!==Math.sign(next-wristX) : false;
+    const score = (reversal ? 1.2 : 0) + (Number.isFinite(shoulderW) ? (1-Math.min(1, shoulderW/0.45)) : 0);
+    if (score > bestScore) { bestScore = score; topIndex = i; }
+  }
+  if (!Number.isFinite(topIndex)) { topIndex = Math.floor((takeawayStartIndex + swingEnd) * 0.55); notes.push('Top index fallback used.'); }
+
+  let impactIndex = null;
+  const addressWristX = median([visiblePoint(frames[addressIndex], LANDMARK.leftWrist)?.x, visiblePoint(frames[addressIndex], LANDMARK.rightWrist)?.x]);
+  let bestImpactDist = Infinity;
+  for (let i = topIndex + 1; i <= swingEnd; i += 1) {
+    const wx = median([visiblePoint(frames[i], LANDMARK.leftWrist)?.x, visiblePoint(frames[i], LANDMARK.rightWrist)?.x]);
+    if (!Number.isFinite(wx) || !Number.isFinite(addressWristX)) continue;
+    const d = Math.abs(wx - addressWristX);
+    if (d < bestImpactDist) { bestImpactDist = d; impactIndex = i; }
+  }
+  if (!Number.isFinite(impactIndex)) { impactIndex = Math.floor((takeawayStartIndex + swingEnd) * 0.8); notes.push('Impact index fallback used.'); }
+
+  const finishIndex = Math.min(frames.length - 1, Math.max(impactIndex + 1, swingEnd));
+  const confidence = notes.length ? 'low' : 'high';
   notes.push(`Detected phase indices: address=${addressIndex ?? 'n/a'}, top=${topIndex ?? 'n/a'}, impact=${impactIndex ?? 'n/a'}`);
   return {
     addressIndex,
@@ -112,11 +144,14 @@ export function detectSwingPhases(poseTimeline = [], options = {}) {
     impactIndex,
     finishIndex,
     analysisStartIndex: addressIndex,
-    analysisEndIndex: finish.length ? finish[finish.length - 1].frameIndex : (swing.length ? swing[swing.length - 1].frameIndex : null),
+    analysisEndIndex: finishIndex,
     confidence,
     notes,
   };
 }
+
+function hasPair(frame, a, b) { return Boolean(visiblePoint(frame, a) && visiblePoint(frame, b)); }
+function distance(a,b){ if(!a||!b) return null; return Math.hypot(a.x-b.x,a.y-b.y); }
 
 export function getCalibrationFrames(phaseFrames = []) {
   return phaseFrames.filter((frame) => frame.phase === 'calibration');
@@ -225,6 +260,13 @@ function visiblePoint(frame, index) {
   const landmark = frame?.landmarks?.[index];
   if (!landmark || (landmark.visibility ?? 1) < MIN_VISIBILITY) return null;
   return landmark;
+}
+
+function median(values) {
+  const usable = values.filter(Number.isFinite).sort((a, b) => a - b);
+  if (!usable.length) return null;
+  const m = Math.floor(usable.length / 2);
+  return usable.length % 2 ? usable[m] : (usable[m - 1] + usable[m]) / 2;
 }
 
 function percentile(values, percentileRank) {
