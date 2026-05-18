@@ -47,6 +47,16 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
             We could not read enough body landmarks from this recording. Try brighter light, a steady camera, and keeping more of your body in view.
           </p>
         )}
+        {!analysis?.fullFailure && diagnostics.framesWithRawLandmarks > 0 && (diagnostics.framesWithAnyVisiblePose || 0) < Math.max(8, Math.round((diagnostics.totalFramesSampled || 0) * 0.2)) && (
+          <p className="inline-warning">
+            Pose landmarks were found, but confidence was low. Move the phone closer, keep the full body visible, and avoid motion blur.
+          </p>
+        )}
+        {!analysis?.fullFailure && (diagnostics.framesWithRawLandmarks || 0) === 0 && diagnostics.totalFramesSampled > 0 && (
+          <p className="inline-warning">
+            The pose model did not find a body in the sampled frames. Try recording from farther back with your whole body visible.
+          </p>
+        )}
         {showDebugPanel && analysis?.error && <p className="debug-error">Debug detail: {analysis.error}</p>}
       </div>
 
@@ -130,8 +140,28 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
               <dd>{diagnostics.totalFramesSampled}</dd>
             </div>
             <div>
+              <dt>Video dimensions</dt>
+              <dd>{diagnostics.videoDimensions?.width && diagnostics.videoDimensions?.height ? `${diagnostics.videoDimensions.width}×${diagnostics.videoDimensions.height}` : 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>Raw landmarks frames</dt>
+              <dd>{diagnostics.framesWithRawLandmarks ?? 0}</dd>
+            </div>
+            <div>
+              <dt>Person-like pose frames</dt>
+              <dd>{diagnostics.framesWithAnyPersonLikePose ?? diagnostics.framesWithAnyPose ?? 0}</dd>
+            </div>
+            <div>
               <dt>Pose frames found</dt>
-              <dd>{diagnostics.framesWithAnyPose}</dd>
+              <dd>{diagnostics.framesWithAnyVisiblePose ?? diagnostics.framesWithAnyPose}</dd>
+            </div>
+            <div>
+              <dt>Fallback frames</dt>
+              <dd>{diagnostics.framesUsingFallback ?? 0} ({Math.round((diagnostics.fallbackFrameRatio || 0) * 100)}%)</dd>
+            </div>
+            <div>
+              <dt>Final reason</dt>
+              <dd>{diagnostics.finalReason ?? diagnostics.reason ?? 'n/a'}</dd>
             </div>
             <div>
               <dt>Analyzable categories</dt>
