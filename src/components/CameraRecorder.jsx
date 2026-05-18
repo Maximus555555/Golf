@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const MAX_RECORDING_MS = 8000;
+const MAX_RECORDING_MS = 6000;
 const PRE_RECORDING_COUNTDOWN_STEPS = ['Ready', 'Set', 'Go!'];
 const COUNTDOWN_STEP_MS = 1000;
 
@@ -20,6 +20,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
   const countdownRef = useRef(null);
   const preRecordingCountdownRef = useRef(null);
   const preRecordingStartRef = useRef(null);
+  const recordingStartedAtRef = useRef(null);
   const isMountedRef = useRef(false);
   const [cameraStatus, setCameraStatus] = useState('idle');
   const [error, setError] = useState('');
@@ -131,6 +132,8 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     setIsCountingDown(false);
     if (recorderRef.current?.state === 'recording') {
       recorderRef.current.stop();
+    } else {
+      setRecordingPhasePrompt('');
     }
   }, []);
 
@@ -179,7 +182,9 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
         return;
       }
       stopStream();
-      onRecordingComplete({ blob, mimeType: blob.type, durationMs: MAX_RECORDING_MS });
+      const actualDurationMs = recordingStartedAtRef.current ? Math.min(MAX_RECORDING_MS, Date.now() - recordingStartedAtRef.current) : MAX_RECORDING_MS;
+      recordingStartedAtRef.current = null;
+      onRecordingComplete({ blob, mimeType: blob.type, durationMs: actualDurationMs });
     };
 
     try {
@@ -192,6 +197,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     setIsRecording(true);
     timerRef.current = window.setTimeout(stopRecording, MAX_RECORDING_MS);
     const recordingStartedAt = Date.now();
+    recordingStartedAtRef.current = recordingStartedAt;
     countdownRef.current = window.setInterval(() => {
       const elapsedMs = Date.now() - recordingStartedAt;
       setSecondsLeft(Math.max(0, Math.ceil((MAX_RECORDING_MS - elapsedMs) / 1000)));

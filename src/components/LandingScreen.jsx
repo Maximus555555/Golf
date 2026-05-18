@@ -58,7 +58,7 @@ export default function LandingScreen({ onStart }) {
   return (
     <section className="screen landing-screen">
       <div className="hero-card">
-        <span className="pill">No login · No backend · 10 seconds</span>
+        <span className="pill">No login · No backend · 6 seconds</span>
         <h2>Optional measurement calibration</h2>
         <p>Enter your height to help SwingFix estimate real-world movement, like how many inches your head or hips moved. This is optional.</p>
 
