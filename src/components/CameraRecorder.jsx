@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const MAX_RECORDING_MS = 6000;
+const MAX_RECORDING_MS = 10000;
 
 function supportedMimeType() {
   if (!window.MediaRecorder) return '';
@@ -20,7 +20,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
   const [cameraStatus, setCameraStatus] = useState('idle');
   const [error, setError] = useState('');
   const [isRecording, setIsRecording] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState(6);
+  const [secondsLeft, setSecondsLeft] = useState(MAX_RECORDING_MS / 1000);
   const [recordingSupported, setRecordingSupported] = useState(true);
 
   const stopStream = useCallback(() => {
@@ -134,7 +134,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
 
     chunksRef.current = [];
     setError('');
-    setSecondsLeft(6);
+    setSecondsLeft(MAX_RECORDING_MS / 1000);
     const mimeType = supportedMimeType();
     let recorder;
     try {
