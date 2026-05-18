@@ -26,6 +26,10 @@ const MIN_VISIBILITY = 0.45;
 const FULL_FAILURE_MIN_ANY_POSE_FRAMES = 8;
 const FULL_FAILURE_MIN_USABLE_RATIO = 0.1;
 const MIN_CATEGORY_FRAMES = 5;
+const MIN_STABLE_BODY_SCALE = 0.18;
+const OUTLIER_WIDTH_CHANGE_LIMIT = 0.5;
+const MOVEMENT_PERCENTILE = 90;
+const ARM_COLLAPSE_PERCENTILE = 10;
 const QUALITY_LANDMARKS = [
   { name: 'nose', index: LANDMARK.nose },
   { name: 'leftShoulder', index: LANDMARK.leftShoulder },
@@ -55,6 +59,8 @@ const RECORDING_QUALITY_WARNINGS = {
   camera_too_shaky: 'The camera appears to move during the swing. Place the phone on a stable surface for better feedback.',
   too_few_usable_frames: 'The app could not read enough visible body landmarks. Try recording again in brighter light with a steadier camera.',
   wrong_distance: 'The camera may be too close. Move the phone farther back so your whole body stays in frame.',
+  unstable_tracking_points: 'Some body-tracking points jumped during the video, so the app ignored unstable frames.',
+  unstable_movement_scale: 'Body size changed during tracking, so the app used a safer estimate for movement scale.',
 };
 
 function point(frame, index) {
@@ -95,6 +101,24 @@ function angleDegrees(a, b, c) {
 function average(values) {
   const usable = values.filter((value) => Number.isFinite(value));
   return usable.length ? usable.reduce((sum, value) => sum + value, 0) / usable.length : null;
+}
+
+function median(values) {
+  const usable = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!usable.length) return null;
+  const middle = Math.floor(usable.length / 2);
+  return usable.length % 2 ? usable[middle] : (usable[middle - 1] + usable[middle]) / 2;
+}
+
+function percentile(values, percentileRank) {
+  const usable = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!usable.length) return null;
+  if (usable.length === 1) return usable[0];
+  const index = (Math.max(0, Math.min(100, percentileRank)) / 100) * (usable.length - 1);
+  const lower = Math.floor(index);
+  const upper = Math.ceil(index);
+  if (lower === upper) return usable[lower];
+  return usable[lower] + (usable[upper] - usable[lower]) * (index - lower);
 }
 
 function max(values) {
@@ -164,6 +188,7 @@ function frameMetrics(frame) {
     visibleRequiredRatio: visibleQualityCount / QUALITY_LANDMARKS.length,
     hasAnyLandmark: visibleQualityCount > 0,
     bounds: boundingBox(visiblePoints),
+    visiblePoints,
   };
 }
 
@@ -194,7 +219,7 @@ function makeIssue(issueId, severity, confidence, movementDescription) {
 }
 
 export function analyzeSwing(poseTimeline = [], videoStats = {}) {
-  const metrics = poseTimeline.map(frameMetrics);
+  const metrics = poseTimeline.map((frame, index) => ({ ...frameMetrics(frame), frameIndex: index }));
   const totalFramesSampled = videoStats.totalFramesSampled ?? videoStats.totalFrames ?? poseTimeline.length;
   const framesWithAnyPose = videoStats.framesWithAnyPose ?? metrics.filter((metric) => metric.hasAnyLandmark).length;
   const usableFramePercentage = totalFramesSampled ? framesWithAnyPose / totalFramesSampled : 0;
@@ -221,16 +246,25 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
     };
   }
 
-  const headMovementMetrics = metrics.filter((metric) => metric.head);
-  const shoulderOnlyPostureMetrics = metrics.filter((metric) => metric.shoulderCenter && metric.shoulderWidth > 0);
-  const hipOnlyPostureMetrics = metrics.filter((metric) => metric.hipCenter);
-  const postureMetrics = metrics.filter((metric) => metric.shoulderCenter || metric.hipCenter);
-  const hipMetrics = metrics.filter((metric) => metric.hipCenter);
-  const leftLeadArmMetrics = metrics.filter((metric) => Number.isFinite(metric.leftArmAngle));
-  const rightLeadArmMetrics = metrics.filter((metric) => Number.isFinite(metric.rightArmAngle));
+  const stableBodyScale = getStableBodyScale(metrics);
+  const calculationDiagnostics = {
+    stableBodyScale: stableBodyScale.scale,
+    stableBodyScaleSource: stableBodyScale.source,
+    scaleUnstable: stableBodyScale.scaleUnstable,
+    clampedOrDiscarded: stableBodyScale.clampedToMinimum ? ['body-scale-clamped-to-safe-minimum'] : [],
+  };
+  const outlierReport = getOutlierReport(metrics, stableBodyScale);
+  const stableMetrics = filterOutlierMetrics(metrics, outlierReport);
+  const headMovementMetrics = stableMetrics.filter((metric) => metric.head);
+  const shoulderOnlyPostureMetrics = stableMetrics.filter((metric) => metric.shoulderCenter && metric.shoulderWidth > 0);
+  const hipOnlyPostureMetrics = stableMetrics.filter((metric) => metric.hipCenter);
+  const postureMetrics = stableMetrics.filter((metric) => metric.shoulderCenter || metric.hipCenter);
+  const hipMetrics = stableMetrics.filter((metric) => metric.hipCenter);
+  const leftLeadArmMetrics = stableMetrics.filter((metric) => Number.isFinite(metric.leftArmAngle));
+  const rightLeadArmMetrics = stableMetrics.filter((metric) => Number.isFinite(metric.rightArmAngle));
   const leadArmSide = rightLeadArmMetrics.length > leftLeadArmMetrics.length ? 'right' : 'left';
   const leadArmMetrics = leadArmSide === 'right' ? rightLeadArmMetrics : leftLeadArmMetrics;
-  const finishBalanceMetrics = metrics.filter((metric) => metric.hipCenter && metric.kneeCenter && (metric.footCenter || metric.ankleCenter));
+  const finishBalanceMetrics = stableMetrics.filter((metric) => metric.hipCenter && metric.kneeCenter && (metric.footCenter || metric.ankleCenter));
   const shoulderTurnMetrics = shoulderOnlyPostureMetrics;
   const analyzability = {
     headMovement: makeAnalyzability(headMovementMetrics, 'No reliable head or face landmark was visible often enough.'),
@@ -241,86 +275,101 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
     finishBalance: makeAnalyzability(finishBalanceMetrics, 'Hips, knees, and ankles or feet were not visible often enough.'),
   };
   const skippedIssueCategories = getSkippedIssueCategories(analyzability);
-  const recordingQualityNotes = getRecordingQualityNotes(metrics, diagnostics, analyzability);
+  const recordingQualityNotes = getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale);
   const detectedIssues = [];
 
   let maxHeadMove = null;
+  let percentileHeadMove = null;
   if (analyzability.headMovement.analyzable) {
     const headWindows = getWindows(headMovementMetrics);
     const setupHead = midpointOfPoints(headWindows.setup.map((metric) => metric.head));
-    const headScale = getMovementScale(headMovementMetrics);
-    maxHeadMove = max(headMovementMetrics.map((metric) => (metric.head && setupHead ? distance(metric.head, setupHead) / headScale : null)));
-    if (maxHeadMove > 0.45) {
+    const headScale = stableBodyScale.scale;
+    const headMovementValues = headMovementMetrics.map((metric) => (metric.head && setupHead ? distance(metric.head, setupHead) / headScale : null));
+    const sanitizedHeadMove = getSanitizedRatio(headMovementValues, MOVEMENT_PERCENTILE, 0.8, 1.2, 'head-movement', calculationDiagnostics);
+    maxHeadMove = sanitizedHeadMove.rawMax;
+    percentileHeadMove = sanitizedHeadMove.used;
+    if (Number.isFinite(percentileHeadMove) && percentileHeadMove > 0.12) {
+      const level = movementLevel(percentileHeadMove, 0.12, 0.22, 0.35);
       detectedIssues.push(
         makeIssue(
           'excessive_head_movement',
-          severityFromThresholds(maxHeadMove, 0.45, 0.75, 1.05),
-          clampConfidence((maxHeadMove - 0.3) / 0.85),
-          `Detected head movement was about ${formatRatio(maxHeadMove)} body-width units from your setup position.`,
+          severityFromThresholds(percentileHeadMove, 0.12, 0.22, 0.35),
+          clampConfidence((percentileHeadMove - 0.08) / 0.35),
+          `Estimated head movement: ${level}. Your head moved noticeably from its setup position.`,
         ),
       );
     }
   }
 
+  let rawMaxPostureRise = null;
   let postureRise = null;
   if (analyzability.posture.analyzable) {
     const postureWindows = getWindows(postureMetrics);
-    const postureScale = getMovementScale(postureMetrics);
-    const setupShoulderY = average(postureWindows.setup.map((metric) => metric.shoulderCenter?.y));
-    const setupHipY = average(postureWindows.setup.map((metric) => metric.hipCenter?.y));
-    const maxShoulderRise = max(postureMetrics.map((metric) => (Number.isFinite(setupShoulderY) && metric.shoulderCenter ? setupShoulderY - metric.shoulderCenter.y : null)));
-    const maxHipRise = max(postureMetrics.map((metric) => (Number.isFinite(setupHipY) && metric.hipCenter ? setupHipY - metric.hipCenter.y : null)));
-    if (shoulderOnlyPostureMetrics.length >= MIN_CATEGORY_FRAMES && hipOnlyPostureMetrics.length >= MIN_CATEGORY_FRAMES) {
-      postureRise = ((maxShoulderRise || 0) + (maxHipRise || 0) * 0.7) / postureScale;
-    } else if (shoulderOnlyPostureMetrics.length >= MIN_CATEGORY_FRAMES) {
-      postureRise = (maxShoulderRise || 0) / postureScale;
-    } else if (hipOnlyPostureMetrics.length >= MIN_CATEGORY_FRAMES) {
-      postureRise = (maxHipRise || 0) / postureScale;
-    }
-    if (postureRise > 0.22) {
-      const partialPosture = shoulderOnlyPostureMetrics.length < MIN_CATEGORY_FRAMES || hipOnlyPostureMetrics.length < MIN_CATEGORY_FRAMES;
+    const postureScale = stableBodyScale.scale;
+    const setupShoulderY = median(postureWindows.setup.map((metric) => metric.shoulderCenter?.y));
+    const setupHipY = median(postureWindows.setup.map((metric) => metric.hipCenter?.y));
+    const postureRiseValues = postureMetrics.map((metric) => {
+      const shoulderRise = Number.isFinite(setupShoulderY) && metric.shoulderCenter ? Math.max(0, setupShoulderY - metric.shoulderCenter.y) : null;
+      const hipRise = Number.isFinite(setupHipY) && metric.hipCenter ? Math.max(0, setupHipY - metric.hipCenter.y) : null;
+      if (shoulderRise !== null && hipRise !== null) return (shoulderRise + hipRise * 0.7) / postureScale;
+      if (shoulderRise !== null) return shoulderRise / postureScale;
+      if (hipRise !== null) return hipRise / postureScale;
+      return null;
+    });
+    const sanitizedPostureRise = getSanitizedRatio(postureRiseValues, MOVEMENT_PERCENTILE, 0.7, 1.2, 'posture-rise', calculationDiagnostics);
+    rawMaxPostureRise = sanitizedPostureRise.rawMax;
+    postureRise = sanitizedPostureRise.used;
+    if (Number.isFinite(postureRise) && postureRise > 0.1) {
+      const level = movementLevel(postureRise, 0.1, 0.18, 0.28);
       detectedIssues.push(
         makeIssue(
           'posture_loss',
-          severityFromThresholds(postureRise, 0.22, 0.35, 0.58),
-          clampConfidence(((postureRise - 0.16) / 0.5) * (partialPosture ? 0.75 : 1)),
-          partialPosture
-            ? `Your visible shoulder or hip height rose by about ${formatRatio(postureRise)} body-width units compared with setup.`
-            : `Your shoulder and hip height rose by about ${formatRatio(postureRise)} body-width units compared with setup.`,
+          severityFromThresholds(postureRise, 0.1, 0.18, 0.28),
+          clampConfidence((postureRise - 0.06) / 0.3),
+          `Estimated posture change: ${level}. Your upper body rose noticeably compared with setup.`,
         ),
       );
     }
   }
 
   let minLeadArmAngle = null;
+  let percentileLeadArmAngle = null;
   if (analyzability.leadArm.analyzable) {
     const leadArmWindows = getWindows(leadArmMetrics);
-    minLeadArmAngle = min(leadArmWindows.backswing.map((metric) => (leadArmSide === 'right' ? metric.rightArmAngle : metric.leftArmAngle)));
-    if (Number.isFinite(minLeadArmAngle) && minLeadArmAngle < 140) {
+    const leadArmAngles = leadArmWindows.backswing.map((metric) => (leadArmSide === 'right' ? metric.rightArmAngle : metric.leftArmAngle));
+    const sanitizedLeadArmAngle = getSanitizedLeadArmAngle(leadArmAngles, calculationDiagnostics);
+    minLeadArmAngle = sanitizedLeadArmAngle.rawMin;
+    percentileLeadArmAngle = sanitizedLeadArmAngle.used;
+    if (Number.isFinite(percentileLeadArmAngle) && percentileLeadArmAngle < 155) {
       detectedIssues.push(
         makeIssue(
           'lead_arm_collapse',
-          severityFromThresholds(140 - minLeadArmAngle, 0, 18, 40),
-          clampConfidence((145 - minLeadArmAngle) / 55),
-          `The smallest visible ${leadArmSide}-arm angle was about ${Math.round(minLeadArmAngle)}° near the backswing.`,
+          severityFromThresholds(180 - percentileLeadArmAngle, 25, 40, 60),
+          clampConfidence((155 - percentileLeadArmAngle) / 50),
+          `Estimated lead arm angle: about ${Math.round(percentileLeadArmAngle)}°. Your lead arm appeared to bend near the top of the backswing.`,
         ),
       );
     }
   }
 
   let maxHipSway = null;
+  let percentileHipSway = null;
   if (analyzability.hipSway.analyzable) {
     const hipWindows = getWindows(hipMetrics);
     const setupHip = midpointOfPoints(hipWindows.setup.map((metric) => metric.hipCenter));
-    const hipScale = getMovementScale(hipMetrics);
-    maxHipSway = max(hipMetrics.map((metric) => (metric.hipCenter && setupHip ? Math.abs(metric.hipCenter.x - setupHip.x) / hipScale : null)));
-    if (maxHipSway > 0.22) {
+    const hipScale = stableBodyScale.scale;
+    const hipSwayValues = hipMetrics.map((metric) => (metric.hipCenter && setupHip ? Math.abs(metric.hipCenter.x - setupHip.x) / hipScale : null));
+    const sanitizedHipSway = getSanitizedRatio(hipSwayValues, MOVEMENT_PERCENTILE, 0.8, 1.2, 'hip-sway', calculationDiagnostics);
+    maxHipSway = sanitizedHipSway.rawMax;
+    percentileHipSway = sanitizedHipSway.used;
+    if (Number.isFinite(percentileHipSway) && percentileHipSway > 0.12) {
+      const level = movementLevel(percentileHipSway, 0.12, 0.22, 0.35);
       detectedIssues.push(
         makeIssue(
           'hip_sway',
-          severityFromThresholds(maxHipSway, 0.22, 0.32, 0.5),
-          clampConfidence((maxHipSway - 0.16) / 0.42),
-          `Your hip center shifted sideways about ${formatRatio(maxHipSway)} body-width units from setup.`,
+          severityFromThresholds(percentileHipSway, 0.12, 0.22, 0.35),
+          clampConfidence((percentileHipSway - 0.08) / 0.35),
+          `Estimated hip sway: ${level}. Your hip center shifted sideways from setup.`,
         ),
       );
     }
@@ -329,7 +378,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
   let finishDrift = null;
   if (analyzability.finishBalance.analyzable) {
     const finishWindows = getWindows(finishBalanceMetrics);
-    const finishSetupScale = getMovementScale(finishBalanceMetrics);
+    const finishSetupScale = stableBodyScale.scale;
     finishDrift = average(
       finishWindows.finish.map((metric) => {
         const lowerCenter = metric.footCenter || metric.ankleCenter;
@@ -354,7 +403,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
   let shoulderTurnRatio = null;
   if (analyzability.shoulderTurn.analyzable) {
     const shoulderWindows = getWindows(shoulderTurnMetrics);
-    const shoulderTurnSetupWidth = average(shoulderWindows.setup.map((metric) => metric.shoulderWidth)) || getMovementScale(shoulderTurnMetrics);
+    const shoulderTurnSetupWidth = median(shoulderWindows.setup.map((metric) => metric.shoulderWidth)) || stableBodyScale.scale;
     shoulderTurnRatio = getShoulderTurnRatio(shoulderWindows.backswing, shoulderTurnSetupWidth);
     if (Number.isFinite(shoulderTurnRatio) && shoulderTurnRatio > 0.82) {
       detectedIssues.push(
@@ -380,15 +429,23 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
       leadArm: leadArmMetrics.length,
       finishBalance: finishBalanceMetrics.length,
     },
+    stableBodyScale,
+    outlierFramesRemoved: outlierReport.removedFrameCount,
+    outlierReasons: Object.fromEntries([...outlierReport.reasonsByIndex.entries()]),
     analyzability,
     analyzedIssueCategories,
     skippedIssueCategories,
-    maxHeadMove,
-    postureRise,
-    minLeadArmAngle,
-    maxHipSway,
+    rawMaxHeadMove: maxHeadMove,
+    percentileHeadMove,
+    rawMaxPostureRise,
+    percentilePostureRise: postureRise,
+    rawMinLeadArmAngle: minLeadArmAngle,
+    percentileLeadArmAngle,
+    rawMaxHipSway: maxHipSway,
+    percentileHipSway,
     finishDrift,
     shoulderTurnRatio,
+    clampedOrDiscarded: calculationDiagnostics.clampedOrDiscarded,
     reason: 'passed-with-visible-pose-data',
   };
   logAnalysisStats(finalDiagnostics);
@@ -449,27 +506,217 @@ function getAnalyzedIssueCategories(analyzability) {
     .map(([category]) => ({ category, label: labels[category] || category }));
 }
 
+function getStableBodyScale(metrics) {
+  const setupMetrics = getWindows(metrics).setup;
+  const setupScale = getScaleFromCandidates(setupMetrics, 'setup');
+  const fallbackScale = getScaleFromCandidates(metrics, 'all-frames');
+  const selected = setupScale.value ? setupScale : fallbackScale;
+  const unclampedScale = selected.value || MIN_STABLE_BODY_SCALE;
+  const scale = Math.max(MIN_STABLE_BODY_SCALE, unclampedScale);
+  const allFrameScale = fallbackScale.value || scale;
+  const setupToAllDifference = selected.value && allFrameScale ? Math.abs(selected.value - allFrameScale) / Math.max(selected.value, allFrameScale) : 0;
+
+  return {
+    scale,
+    unclampedScale,
+    source: selected.source || 'minimum-safe-scale',
+    usedSetupFrames: selected.frameSet === 'setup',
+    clampedToMinimum: scale !== unclampedScale,
+    scaleUnstable: setupToAllDifference > 0.35 || setupScale.unstable || fallbackScale.unstable || scale !== unclampedScale,
+    setupMedianShoulderWidth: setupScale.shoulderMedian,
+    setupMedianHipWidth: setupScale.hipMedian,
+    setupMedianBodyBounds: setupScale.boundsMedian,
+    allFrameMedianScale: allFrameScale,
+  };
+}
+
+function getScaleFromCandidates(metrics, frameSet) {
+  const shoulderValues = cleanScaleValues(metrics.map((metric) => metric.shoulderWidth));
+  const hipValues = cleanScaleValues(metrics.map((metric) => metric.hipWidth));
+  const boundsValues = cleanScaleValues(metrics.map((metric) => getBodyBoundsScale(metric.bounds)));
+  const stanceValues = cleanScaleValues(metrics.map((metric) => metric.stanceWidth));
+  const candidates = [
+    { source: `${frameSet}-shoulder-width`, values: shoulderValues, value: median(shoulderValues) },
+    { source: `${frameSet}-hip-width`, values: hipValues, value: median(hipValues) },
+    { source: `${frameSet}-visible-body-bounds`, values: boundsValues, value: median(boundsValues) },
+    { source: `${frameSet}-stance-width`, values: stanceValues, value: median(stanceValues) },
+  ];
+  const selected = candidates.find((candidate) => Number.isFinite(candidate.value));
+
+  return {
+    frameSet,
+    source: selected?.source,
+    value: selected?.value ?? null,
+    shoulderMedian: median(shoulderValues),
+    hipMedian: median(hipValues),
+    boundsMedian: median(boundsValues),
+    unstable: candidates.some((candidate) => isScaleSeriesUnstable(candidate.values)),
+  };
+}
+
+function cleanScaleValues(values) {
+  return values.filter((value) => Number.isFinite(value) && value >= 0.04 && value <= 0.9);
+}
+
+function getBodyBoundsScale(bounds) {
+  if (!bounds) return null;
+  const width = bounds.maxX - bounds.minX;
+  const height = bounds.maxY - bounds.minY;
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return Math.max(width, height * 0.35);
+}
+
+function isScaleSeriesUnstable(values) {
+  if (values.length < 5) return false;
+  const middle = median(values);
+  if (!middle) return false;
+  const spread = percentile(values, 90) - percentile(values, 10);
+  return spread / middle > 0.45;
+}
+
 function getMovementScale(metrics) {
-  return (
-    average(metrics.map((metric) => metric.shoulderWidth).filter((value) => value > 0)) ||
-    average(metrics.map((metric) => metric.hipWidth).filter((value) => value > 0)) ||
-    average(metrics.map((metric) => metric.stanceWidth).filter((value) => value > 0)) ||
-    getAverageBoundsWidth(metrics) ||
-    0.18
-  );
+  return getStableBodyScale(metrics).scale;
 }
 
 function getAverageBoundsWidth(metrics) {
-  return average(metrics.map((metric) => (metric.bounds ? metric.bounds.maxX - metric.bounds.minX : null)).filter((value) => value > 0));
+  return average(metrics.map((metric) => getBodyBoundsScale(metric.bounds)).filter((value) => value > 0));
 }
 
-function getRecordingQualityNotes(metrics, diagnostics, analyzability) {
+
+function getOutlierReport(metrics, stableScaleDiagnostics) {
+  const setupMetrics = getWindows(metrics).setup;
+  const setupShoulderWidth = median(cleanScaleValues(setupMetrics.map((metric) => metric.shoulderWidth)));
+  const setupHipWidth = median(cleanScaleValues(setupMetrics.map((metric) => metric.hipWidth)));
+  const badIndexes = new Set();
+  const reasonsByIndex = new Map();
+  let previousHead = null;
+
+  metrics.forEach((metric, index) => {
+    const reasons = [];
+    if (setupShoulderWidth && metric.shoulderWidth && Math.abs(metric.shoulderWidth - setupShoulderWidth) / setupShoulderWidth > OUTLIER_WIDTH_CHANGE_LIMIT) {
+      reasons.push('shoulder-width-jump');
+    }
+    if (setupHipWidth && metric.hipWidth && Math.abs(metric.hipWidth - setupHipWidth) / setupHipWidth > OUTLIER_WIDTH_CHANGE_LIMIT) {
+      reasons.push('hip-width-jump');
+    }
+    if (metric.head && previousHead) {
+      const headJump = distance(metric.head, previousHead);
+      if (headJump > Math.max(0.25, stableScaleDiagnostics.scale * 1.15)) {
+        reasons.push('head-position-jump');
+      }
+    }
+    if (metric.bounds && !areLandmarksWithinLooseBounds(metric.visiblePoints)) {
+      reasons.push('landmark-outside-normalized-range');
+    }
+    if (metric.visibleRequiredRatio < 0.35) {
+      reasons.push('low-key-landmark-visibility');
+    }
+
+    if (reasons.length) {
+      badIndexes.add(index);
+      reasonsByIndex.set(index, reasons);
+    } else if (metric.head) {
+      previousHead = metric.head;
+    }
+  });
+
+  return {
+    badIndexes,
+    reasonsByIndex,
+    removedFrameCount: badIndexes.size,
+    setupShoulderWidth,
+    setupHipWidth,
+  };
+}
+
+function filterOutlierMetrics(metrics, outlierReport, requiredPredicate = () => true) {
+  return metrics.filter((metric) => requiredPredicate(metric) && !outlierReport.badIndexes.has(metric.frameIndex));
+}
+
+function areLandmarksWithinLooseBounds(points = []) {
+  return points.every((landmark) => landmark.x >= -0.2 && landmark.x <= 1.2 && landmark.y >= -0.2 && landmark.y <= 1.2);
+}
+
+function getSanitizedRatio(rawValues, percentileRank, cap, trackingErrorLimit, diagnosticsKey, calculationDiagnostics) {
+  const rawMax = max(rawValues);
+  let used = percentile(rawValues, percentileRank);
+  const clampedOrDiscarded = [];
+
+  if (Number.isFinite(used) && used > trackingErrorLimit && !hasConsecutiveValues(rawValues, (value) => value > trackingErrorLimit, 3)) {
+    clampedOrDiscarded.push(`${diagnosticsKey}-discarded-tracking-spike`);
+    used = null;
+  }
+
+  if (Number.isFinite(used) && used > cap) {
+    clampedOrDiscarded.push(`${diagnosticsKey}-clamped-to-${cap}`);
+    used = cap;
+  }
+
+  calculationDiagnostics.clampedOrDiscarded.push(...clampedOrDiscarded);
+  return { rawMax, used };
+}
+
+function getSanitizedLeadArmAngle(rawAngles, calculationDiagnostics) {
+  const rawMin = min(rawAngles);
+  let used = percentile(rawAngles, ARM_COLLAPSE_PERCENTILE);
+
+  if (Number.isFinite(used) && used < 60 && !hasConsecutiveValues(rawAngles, (value) => value < 60, 3)) {
+    calculationDiagnostics.clampedOrDiscarded.push('lead-arm-angle-discarded-unconfirmed-tracking-spike');
+    used = null;
+  }
+
+  if (Number.isFinite(used) && used < 45 && !hasConsecutiveValues(rawAngles, (value) => value < 45, 3)) {
+    calculationDiagnostics.clampedOrDiscarded.push('lead-arm-angle-discarded-tracking-spike');
+    used = null;
+  }
+
+  if (Number.isFinite(used) && used < 60) {
+    calculationDiagnostics.clampedOrDiscarded.push('lead-arm-angle-clamped-to-60');
+    used = 60;
+  }
+  if (Number.isFinite(used) && used > 180) {
+    calculationDiagnostics.clampedOrDiscarded.push('lead-arm-angle-clamped-to-180');
+    used = 180;
+  }
+
+  return { rawMin, used };
+}
+
+function hasConsecutiveValues(values, predicate, requiredRun) {
+  let run = 0;
+  for (const value of values) {
+    if (Number.isFinite(value) && predicate(value)) {
+      run += 1;
+      if (run >= requiredRun) return true;
+    } else {
+      run = 0;
+    }
+  }
+  return false;
+}
+
+function movementLevel(value, lowThreshold, mediumThreshold, highThreshold) {
+  if (value >= highThreshold) return 'high';
+  if (value >= mediumThreshold) return 'moderate';
+  if (value >= lowThreshold) return 'low';
+  return 'low';
+}
+
+function getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale) {
   const notes = [];
   const averageVisibility = average(metrics.map((metric) => metric.visibleRequiredRatio)) || 0;
   const inFrameRatio = average(metrics.map((metric) => (isComfortablyInFrame(metric.bounds) ? 1 : 0))) || 0;
   const tooCloseRatio = average(metrics.map((metric) => (looksTooClose(metric.bounds) ? 1 : 0))) || 0;
   const shakeScore = getCameraShakeScore(metrics.filter((metric) => metric.shoulderCenter || metric.hipCenter || metric.ankleCenter || metric.footCenter));
   const skippedSomeAnalyses = Object.values(analyzability).some((value) => !value.analyzable);
+
+  if (outlierReport?.removedFrameCount > 0) {
+    notes.push(makeRecordingNote('unstable_tracking_points'));
+  }
+
+  if (stableBodyScale?.scaleUnstable) {
+    notes.push(makeRecordingNote('unstable_movement_scale'));
+  }
 
   if (skippedSomeAnalyses || averageVisibility < 0.55 || inFrameRatio < 0.45) {
     notes.push(makeRecordingNote('body_not_fully_visible'));
@@ -573,6 +820,17 @@ function logAnalysisStats(diagnostics) {
     leadArmAnalyzable: diagnostics.analyzability?.leadArm?.analyzable ? 'yes' : 'no',
     finishBalanceAnalyzable: diagnostics.analyzability?.finishBalance?.analyzable ? 'yes' : 'no',
     skippedIssueCategories: diagnostics.skippedIssueCategories,
+    stableBodyScale: diagnostics.stableBodyScale?.scale,
+    stableBodyScaleSource: diagnostics.stableBodyScale?.source,
+    scaleUnstable: diagnostics.stableBodyScale?.scaleUnstable,
+    outlierFramesRemoved: diagnostics.outlierFramesRemoved,
+    rawMaxHeadMovement: diagnostics.rawMaxHeadMove,
+    percentileHeadMovementUsed: diagnostics.percentileHeadMove,
+    rawMaxPostureRise: diagnostics.rawMaxPostureRise,
+    percentilePostureRiseUsed: diagnostics.percentilePostureRise,
+    rawMinimumArmAngle: diagnostics.rawMinLeadArmAngle,
+    percentileArmAngleUsed: diagnostics.percentileLeadArmAngle,
+    clampedOrDiscarded: diagnostics.clampedOrDiscarded,
     mostOftenMissingLandmarks: diagnostics.mostOftenMissingLandmarks,
     finalPassFailReason: diagnostics.reason,
   });

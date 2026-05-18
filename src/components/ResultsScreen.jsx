@@ -48,6 +48,34 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
               <dt>Usable percentage</dt>
               <dd>{Math.round((diagnostics.usableFramePercentage || 0) * 100)}%</dd>
             </div>
+            <div>
+              <dt>Stable body scale</dt>
+              <dd>{diagnostics.stableBodyScale?.scale?.toFixed?.(3) ?? 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>Scale source</dt>
+              <dd>{diagnostics.stableBodyScale?.source ?? 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>Outlier frames removed</dt>
+              <dd>{diagnostics.outlierFramesRemoved ?? 0}</dd>
+            </div>
+            <div>
+              <dt>Head movement</dt>
+              <dd>raw {diagnostics.rawMaxHeadMove?.toFixed?.(2) ?? 'n/a'} / used {diagnostics.percentileHeadMove?.toFixed?.(2) ?? 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>Posture rise</dt>
+              <dd>raw {diagnostics.rawMaxPostureRise?.toFixed?.(2) ?? 'n/a'} / used {diagnostics.percentilePostureRise?.toFixed?.(2) ?? 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>Lead arm angle</dt>
+              <dd>raw {diagnostics.rawMinLeadArmAngle?.toFixed?.(0) ?? 'n/a'}° / used {diagnostics.percentileLeadArmAngle?.toFixed?.(0) ?? 'n/a'}°</dd>
+            </div>
+            <div>
+              <dt>Clamped/discarded</dt>
+              <dd>{diagnostics.clampedOrDiscarded?.length ? diagnostics.clampedOrDiscarded.join(', ') : 'none'}</dd>
+            </div>
           </dl>
         </aside>
       )}
