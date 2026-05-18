@@ -291,13 +291,47 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
               </select>
             )}
           </label>
-          <div className="toggle-row">
-            <button type="button" className="secondary-button" onClick={() => onCaptureSetupChange({ ...captureSetup, view: 'face-on' })}>Face-on</button>
-            <button type="button" className="secondary-button" onClick={() => onCaptureSetupChange({ ...captureSetup, view: 'down-the-line' })}>Down-the-line</button>
+          <div className="setup-option-group" role="group" aria-label="Camera view">
+            <p className="setup-option-title">Camera view</p>
+            <div className="toggle-row">
+              <button
+                type="button"
+                className={`secondary-button setup-toggle ${captureSetup?.view === 'face-on' ? 'setup-toggle--active' : ''}`}
+                aria-pressed={captureSetup?.view === 'face-on'}
+                onClick={() => onCaptureSetupChange({ ...captureSetup, view: 'face-on' })}
+              >
+                Face-on
+              </button>
+              <button
+                type="button"
+                className={`secondary-button setup-toggle ${captureSetup?.view === 'down-the-line' ? 'setup-toggle--active' : ''}`}
+                aria-pressed={captureSetup?.view === 'down-the-line'}
+                onClick={() => onCaptureSetupChange({ ...captureSetup, view: 'down-the-line' })}
+              >
+                Down-the-line
+              </button>
+            </div>
           </div>
-          <div className="toggle-row">
-            <button type="button" className="secondary-button" onClick={() => onCaptureSetupChange({ ...captureSetup, handedness: 'right' })}>Right-handed</button>
-            <button type="button" className="secondary-button" onClick={() => onCaptureSetupChange({ ...captureSetup, handedness: 'left' })}>Left-handed</button>
+          <div className="setup-option-group" role="group" aria-label="Handedness">
+            <p className="setup-option-title">Handedness</p>
+            <div className="toggle-row">
+              <button
+                type="button"
+                className={`secondary-button setup-toggle ${captureSetup?.handedness === 'right' ? 'setup-toggle--active' : ''}`}
+                aria-pressed={captureSetup?.handedness === 'right'}
+                onClick={() => onCaptureSetupChange({ ...captureSetup, handedness: 'right' })}
+              >
+                Right-handed
+              </button>
+              <button
+                type="button"
+                className={`secondary-button setup-toggle ${captureSetup?.handedness === 'left' ? 'setup-toggle--active' : ''}`}
+                aria-pressed={captureSetup?.handedness === 'left'}
+                onClick={() => onCaptureSetupChange({ ...captureSetup, handedness: 'left' })}
+              >
+                Left-handed
+              </button>
+            </div>
           </div>
           {cameraSwitchError && <p className="error-message">{cameraSwitchError}</p>}
         </div>
