@@ -45,7 +45,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
     setCameraOptions(videos.map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })));
   }, []);
 
-  const startCamera = useCallback(async (deviceId = selectedDeviceId) => {
+  const startCamera = useCallback(async (deviceId) => {
     setCameraStatus('loading');
     setError('');
 
@@ -92,10 +92,11 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
         setError('The camera could not be started. Check permissions and make sure this page is opened over HTTPS.');
       }
     }
-  }, []);
+  }, [enumerateCameras]);
 
   useEffect(() => {
     isMountedRef.current = true;
+    stopStream();
     startCamera(selectedDeviceId);
     return () => {
       isMountedRef.current = false;
@@ -223,18 +224,12 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
   }, [heightCalibration?.enabled, onRecordingComplete, stopRecording, stopStream]);
 
 
-  const handleCameraChange = useCallback(async (event) => {
+  const handleCameraChange = useCallback((event) => {
     const nextId = event.target.value;
     setSelectedDeviceId(nextId);
     window.localStorage.setItem('swingfix-camera-device-id', nextId);
     setCameraSwitchError('');
-    try {
-      stopStream();
-      await startCamera(nextId);
-    } catch {
-      setCameraSwitchError('Could not switch camera. Try another camera option.');
-    }
-  }, [startCamera, stopStream]);
+  }, []);
 
   const startRecording = useCallback(() => {
     if (isCountingDown || isRecording) return;
@@ -296,7 +291,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
             <div className="toggle-row">
               <button
                 type="button"
-                className={`secondary-button setup-toggle ${captureSetup?.view === 'face-on' ? 'setup-toggle--active' : ''}`}
+                className={`setup-option-button ${captureSetup?.view === 'face-on' ? 'active' : ''}`}
                 aria-pressed={captureSetup?.view === 'face-on'}
                 onClick={() => onCaptureSetupChange({ ...captureSetup, view: 'face-on' })}
               >
@@ -304,7 +299,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
               </button>
               <button
                 type="button"
-                className={`secondary-button setup-toggle ${captureSetup?.view === 'down-the-line' ? 'setup-toggle--active' : ''}`}
+                className={`setup-option-button ${captureSetup?.view === 'down-the-line' ? 'active' : ''}`}
                 aria-pressed={captureSetup?.view === 'down-the-line'}
                 onClick={() => onCaptureSetupChange({ ...captureSetup, view: 'down-the-line' })}
               >
@@ -317,7 +312,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
             <div className="toggle-row">
               <button
                 type="button"
-                className={`secondary-button setup-toggle ${captureSetup?.handedness === 'right' ? 'setup-toggle--active' : ''}`}
+                className={`setup-option-button ${captureSetup?.handedness === 'right' ? 'active' : ''}`}
                 aria-pressed={captureSetup?.handedness === 'right'}
                 onClick={() => onCaptureSetupChange({ ...captureSetup, handedness: 'right' })}
               >
@@ -325,7 +320,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
               </button>
               <button
                 type="button"
-                className={`secondary-button setup-toggle ${captureSetup?.handedness === 'left' ? 'setup-toggle--active' : ''}`}
+                className={`setup-option-button ${captureSetup?.handedness === 'left' ? 'active' : ''}`}
                 aria-pressed={captureSetup?.handedness === 'left'}
                 onClick={() => onCaptureSetupChange({ ...captureSetup, handedness: 'left' })}
               >
