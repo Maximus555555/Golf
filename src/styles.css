@@ -401,6 +401,46 @@ button {
   background: #0f241c;
 }
 
+.replay-speed {
+  display: grid;
+  gap: 8px;
+}
+
+.replay-speed__title {
+  margin: 0;
+  color: #173d30;
+  font-weight: 800;
+}
+
+.replay-speed__buttons {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.speed-button {
+  min-height: 50px;
+  border-radius: 12px;
+  border: 1px solid #b4d1c0;
+  background: #f6fbf8;
+  color: #184533;
+  font-size: 1rem;
+  font-weight: 800;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.speed-button.active {
+  border-color: #18814d;
+  background: #dff3e7;
+  color: #0f5b35;
+}
+
+.replay-speed__help {
+  margin: 0;
+  color: #4b6e5d;
+  font-size: 0.9rem;
+}
+
 .feedback-list {
   display: grid;
   gap: 14px;
