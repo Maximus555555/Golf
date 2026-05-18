@@ -90,6 +90,34 @@ export function classifySwingFrames(poseTimeline = [], videoStats = {}, calibrat
   };
 }
 
+
+export function detectSwingPhases(poseTimeline = [], options = {}) {
+  const classified = classifySwingFrames(poseTimeline, options.videoStats || {}, options.calibrationSetup || {});
+  const setup = getSetupFrames(classified.frames);
+  const swing = getSwingMotionFrames(classified.frames);
+  const finish = getFinishFrames(classified.frames);
+  const addressIndex = setup.length ? setup[Math.max(0, setup.length - 1)].frameIndex : null;
+  const takeawayStartIndex = swing.length ? swing[0].frameIndex : null;
+  const topIndex = swing.length ? swing[Math.floor(swing.length * 0.55)].frameIndex : null;
+  const impactIndex = swing.length ? swing[Math.floor(swing.length * 0.8)].frameIndex : null;
+  const finishIndex = finish.length ? finish[0].frameIndex : null;
+  const confidence = classified.uncertain ? 'low' : swing.length >= 8 ? 'high' : 'medium';
+  const notes = [];
+  if (classified.uncertain) notes.push('Swing phase detection confidence is low; fallback analysis window used.');
+  notes.push(`Detected phase indices: address=${addressIndex ?? 'n/a'}, top=${topIndex ?? 'n/a'}, impact=${impactIndex ?? 'n/a'}`);
+  return {
+    addressIndex,
+    takeawayStartIndex,
+    topIndex,
+    impactIndex,
+    finishIndex,
+    analysisStartIndex: addressIndex,
+    analysisEndIndex: finish.length ? finish[finish.length - 1].frameIndex : (swing.length ? swing[swing.length - 1].frameIndex : null),
+    confidence,
+    notes,
+  };
+}
+
 export function getCalibrationFrames(phaseFrames = []) {
   return phaseFrames.filter((frame) => frame.phase === 'calibration');
 }

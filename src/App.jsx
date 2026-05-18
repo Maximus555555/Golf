@@ -20,6 +20,7 @@ export default function App() {
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisMessage, setAnalysisMessage] = useState('Preparing your swing analysis...');
   const [heightCalibration, setHeightCalibration] = useState({ enabled: false, preferredUnit: 'in' });
+  const [captureSetup, setCaptureSetup] = useState({ view: 'face-on', handedness: 'right' });
 
   const [replayUrl, setReplayUrl] = useState(null);
 
@@ -52,7 +53,7 @@ export default function App() {
         onProgress: (progress) => setAnalysisProgress(progress),
       });
       setAnalysisMessage('Checking beginner swing patterns...');
-      const swingFeedback = analyzeSwing(poseTimeline, poseStats, heightCalibration);
+      const swingFeedback = analyzeSwing(poseTimeline, poseStats, { ...heightCalibration, ...captureSetup });
       setAnalysis({ ...swingFeedback, poseFrameCount: poseTimeline.length, error: null });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Pose analysis was unavailable for this recording.';
@@ -66,7 +67,7 @@ export default function App() {
     } finally {
       setScreen(SCREEN.results);
     }
-  }, [heightCalibration]);
+  }, [captureSetup, heightCalibration]);
 
   const handleRecordAgain = useCallback(() => {
     setRecording(null);
@@ -89,6 +90,8 @@ export default function App() {
       {screen === SCREEN.camera && (
         <CameraRecorder
           heightCalibration={heightCalibration}
+          captureSetup={captureSetup}
+          onCaptureSetupChange={setCaptureSetup}
           onBack={() => setScreen(SCREEN.landing)}
           onRecordingComplete={handleRecordingComplete}
         />

@@ -10,7 +10,7 @@ function supportedMimeType() {
   return types.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
-export default function CameraRecorder({ heightCalibration, onBack, onRecordingComplete }) {
+export default function CameraRecorder({ heightCalibration, captureSetup, onCaptureSetupChange, onBack, onRecordingComplete }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -29,13 +29,23 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
   const [secondsLeft, setSecondsLeft] = useState(MAX_RECORDING_MS / 1000);
   const [recordingSupported, setRecordingSupported] = useState(true);
   const [recordingPhasePrompt, setRecordingPhasePrompt] = useState('');
+  const [cameraOptions, setCameraOptions] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState(() => window.localStorage.getItem('swingfix-camera-device-id') || '');
+  const [cameraSwitchError, setCameraSwitchError] = useState('');
 
   const stopStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
-  }, []);
+  }, [enumerateCameras, selectedDeviceId]);
 
-  const startCamera = useCallback(async () => {
+  const enumerateCameras = useCallback(async () => {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videos = devices.filter((d) => d.kind === "videoinput");
+    setCameraOptions(videos.map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })));
+  }, [enumerateCameras, selectedDeviceId]);
+
+  const startCamera = useCallback(async (deviceId = selectedDeviceId) => {
     setCameraStatus('loading');
     setError('');
 
@@ -50,11 +60,9 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: false,
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
+          video: deviceId
+            ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
         });
       } catch {
         stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
@@ -72,6 +80,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
       }
       setRecordingSupported(Boolean(window.MediaRecorder));
       setCameraStatus('ready');
+      await enumerateCameras();
     } catch (cameraError) {
       if (!isMountedRef.current) return;
       setCameraStatus('error');
@@ -83,11 +92,11 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
         setError('The camera could not be started. Check permissions and make sure this page is opened over HTTPS.');
       }
     }
-  }, []);
+  }, [enumerateCameras, selectedDeviceId]);
 
   useEffect(() => {
     isMountedRef.current = true;
-    startCamera();
+    startCamera(selectedDeviceId);
     return () => {
       isMountedRef.current = false;
       window.clearTimeout(timerRef.current);
@@ -95,7 +104,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
       window.clearInterval(preRecordingCountdownRef.current);
       stopStream();
     };
-  }, [startCamera, stopStream]);
+  }, [selectedDeviceId, startCamera, stopStream]);
 
   useEffect(() => {
     let animationFrame;
@@ -123,7 +132,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     };
     drawOverlay();
     return () => cancelAnimationFrame(animationFrame);
-  }, []);
+  }, [enumerateCameras, selectedDeviceId]);
 
   const stopRecording = useCallback(() => {
     window.clearTimeout(timerRef.current);
@@ -135,7 +144,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     } else {
       setRecordingPhasePrompt('');
     }
-  }, []);
+  }, [enumerateCameras, selectedDeviceId]);
 
   const beginRecording = useCallback(() => {
     if (!streamRef.current || !window.MediaRecorder) {
@@ -213,6 +222,20 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     }, 250);
   }, [heightCalibration?.enabled, onRecordingComplete, stopRecording, stopStream]);
 
+
+  const handleCameraChange = useCallback(async (event) => {
+    const nextId = event.target.value;
+    setSelectedDeviceId(nextId);
+    window.localStorage.setItem('swingfix-camera-device-id', nextId);
+    setCameraSwitchError('');
+    try {
+      stopStream();
+      await startCamera(nextId);
+    } catch {
+      setCameraSwitchError('Could not switch camera. Try another camera option.');
+    }
+  }, [startCamera, stopStream]);
+
   const startRecording = useCallback(() => {
     if (isCountingDown || isRecording) return;
     if (!streamRef.current || !window.MediaRecorder) {
@@ -254,6 +277,28 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
         {heightCalibration?.enabled && (
           <p className="calibration-camera-instruction">After Ready, Set, Go!, stand straight for height calibration, then swing.</p>
         )}
+        
+        <div className="setup-card"> 
+          <p><strong>Record from the correct angle with your full body visible.</strong></p>
+          <label>Camera
+            {cameraOptions.length > 1 && (
+              <select value={selectedDeviceId} onChange={handleCameraChange} className="camera-select">
+                <option value="">Default</option>
+                {cameraOptions.map((camera) => <option key={camera.deviceId} value={camera.deviceId}>{camera.label}</option>)}
+              </select>
+            )}
+          </label>
+          <div className="toggle-row">
+            <button type="button" className="secondary-button" onClick={() => onCaptureSetupChange({ ...captureSetup, view: 'face-on' })}>Face-on</button>
+            <button type="button" className="secondary-button" onClick={() => onCaptureSetupChange({ ...captureSetup, view: 'down-the-line' })}>Down-the-line</button>
+          </div>
+          <div className="toggle-row">
+            <button type="button" className="secondary-button" onClick={() => onCaptureSetupChange({ ...captureSetup, handedness: 'right' })}>Right-handed</button>
+            <button type="button" className="secondary-button" onClick={() => onCaptureSetupChange({ ...captureSetup, handedness: 'left' })}>Left-handed</button>
+          </div>
+          {cameraSwitchError && <p className="error-message">{cameraSwitchError}</p>}
+        </div>
+
         {cameraStatus === 'loading' && <p className="status-message">Starting camera...</p>}
         {error && <p className="error-message">{error}</p>}
         {!recordingSupported && (
