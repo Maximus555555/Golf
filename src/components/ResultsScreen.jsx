@@ -42,9 +42,9 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
         <p className="measurement-warning">
           SwingFix uses phone-video pose tracking, so feedback is an estimate. For best results, record from a stable, well-lit angle with your full body visible.
         </p>
-        {analysis?.fullFailure && (
+        {diagnostics.modelLoaded === false && (
           <p className="inline-warning">
-            We could not read enough body landmarks from this recording. Try brighter light, a steady camera, and keeping more of your body in view.
+            MediaPipe pose model could not load. Check internet access or external MediaPipe asset URLs.
           </p>
         )}
         {!analysis?.fullFailure && diagnostics.framesWithRawLandmarks > 0 && (diagnostics.framesWithAnyVisiblePose || 0) < Math.max(8, Math.round((diagnostics.totalFramesSampled || 0) * 0.2)) && (
@@ -55,6 +55,16 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
         {!analysis?.fullFailure && (diagnostics.framesWithRawLandmarks || 0) === 0 && diagnostics.totalFramesSampled > 0 && (
           <p className="inline-warning">
             The pose model did not find a body in the sampled frames. Try recording from farther back with your whole body visible.
+          </p>
+        )}
+        {!analysis?.fullFailure && (diagnostics.framesWithAnyPersonLikePose || 0) > 0 && Object.values(diagnostics.analyzability || {}).filter((item) => item?.analyzable).length === 0 && (
+          <p className="inline-warning">
+            The app detected a person, but not enough reliable body landmarks were visible for swing feedback.
+          </p>
+        )}
+        {analysis?.fullFailure && (
+          <p className="inline-warning">
+            We could not read enough body landmarks from this recording. Try brighter light, a steady camera, and keeping more of your body in view.
           </p>
         )}
         {showDebugPanel && analysis?.error && <p className="debug-error">Debug detail: {analysis.error}</p>}
@@ -136,32 +146,44 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
           <p className="eyebrow">Dev debug</p>
           <dl>
             <div>
-              <dt>Frames sampled</dt>
+              <dt>totalFramesSampled</dt>
               <dd>{diagnostics.totalFramesSampled}</dd>
             </div>
             <div>
-              <dt>Video dimensions</dt>
+              <dt>videoDimensions</dt>
               <dd>{diagnostics.videoDimensions?.width && diagnostics.videoDimensions?.height ? `${diagnostics.videoDimensions.width}×${diagnostics.videoDimensions.height}` : 'n/a'}</dd>
             </div>
             <div>
-              <dt>Raw landmarks frames</dt>
+              <dt>framesWithRawLandmarks</dt>
               <dd>{diagnostics.framesWithRawLandmarks ?? 0}</dd>
             </div>
             <div>
-              <dt>Person-like pose frames</dt>
+              <dt>framesWithAnyPersonLikePose</dt>
               <dd>{diagnostics.framesWithAnyPersonLikePose ?? diagnostics.framesWithAnyPose ?? 0}</dd>
             </div>
             <div>
-              <dt>Pose frames found</dt>
+              <dt>framesWithAnyVisiblePose</dt>
               <dd>{diagnostics.framesWithAnyVisiblePose ?? diagnostics.framesWithAnyPose}</dd>
             </div>
             <div>
-              <dt>Fallback frames</dt>
-              <dd>{diagnostics.framesUsingFallback ?? 0} ({Math.round((diagnostics.fallbackFrameRatio || 0) * 100)}%)</dd>
+              <dt>framesWithAnyPose</dt>
+              <dd>{diagnostics.framesWithAnyPose ?? 0}</dd>
             </div>
             <div>
-              <dt>Final reason</dt>
+              <dt>framesUsingFallback</dt>
+              <dd>{diagnostics.framesUsingFallback ?? 0} fallbackFrameRatio: {Math.round((diagnostics.fallbackFrameRatio || 0) * 100)}%</dd>
+            </div>
+            <div>
+              <dt>finalReason</dt>
               <dd>{diagnostics.finalReason ?? diagnostics.reason ?? 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>firstDetectionError</dt>
+              <dd>{diagnostics.firstDetectionError || 'n/a'}</dd>
+            </div>
+            <div>
+              <dt>modelLoaded</dt>
+              <dd>{String(Boolean(diagnostics.modelLoaded))}</dd>
             </div>
             <div>
               <dt>Analyzable categories</dt>

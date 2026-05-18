@@ -14,6 +14,15 @@ const SCREEN = {
   results: 'results',
 };
 
+
+
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => window.setTimeout(() => reject(new Error(message)), ms)),
+  ]);
+}
+
 export default function App() {
   const [screen, setScreen] = useState(SCREEN.landing);
   const [recording, setRecording] = useState(null);
@@ -62,12 +71,24 @@ export default function App() {
     setAnalysisMessage('Finding body landmarks in your swing...');
 
     try {
-      const { timeline: poseTimeline, stats: poseStats } = await analyzeVideoBlob(recordedSwing.blob, {
-        onProgress: (progress) => setAnalysisProgress(progress),
-      });
+      const {
+        timeline: poseTimeline,
+        stats: poseStats,
+        error: poseError,
+      } = await withTimeout(
+        analyzeVideoBlob(recordedSwing.blob, {
+          onProgress: (progress) => setAnalysisProgress(progress),
+        }),
+        30000,
+        'Pose analysis timed out. Try recording a shorter, clearer video.',
+      );
       setAnalysisMessage('Checking beginner swing patterns...');
       const swingFeedback = analyzeSwing(poseTimeline, poseStats, { ...heightCalibration, ...captureSetup });
-      setAnalysis({ ...swingFeedback, poseFrameCount: poseTimeline.length, error: null });
+      setAnalysis({
+        ...swingFeedback,
+        poseFrameCount: poseTimeline.length,
+        error: poseError instanceof Error ? poseError.message : poseError ? String(poseError) : null,
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Pose analysis was unavailable for this recording.';
       const fallbackFeedback = analyzeSwing([], { finalReason: errorMessage }, heightCalibration);

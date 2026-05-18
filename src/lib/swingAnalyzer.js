@@ -71,6 +71,8 @@ const RECORDING_QUALITY_WARNINGS = {
   camera_too_shaky: 'The camera appears to move during the swing. Place the phone on a stable surface for better feedback.',
   too_few_usable_frames: 'The app could not read enough visible body landmarks. Try recording again in brighter light with a steadier camera.',
   low_pose_confidence: 'Pose landmarks were found, but confidence was low. Move the phone closer, keep the full body visible, and avoid motion blur.',
+  model_load_failed: 'MediaPipe pose model could not load. Check internet access or external MediaPipe asset URLs.',
+  person_detected_but_metrics_unreliable: 'The app detected a person, but not enough reliable body landmarks were visible for swing feedback.',
   no_body_detected: 'The pose model did not find a body in the sampled frames. Try recording from farther back with your whole body visible.',
   wrong_distance: 'The camera may be too close. Move the phone farther back so your whole body stays in frame.',
   unstable_tracking_points: 'Some body-tracking points jumped during the video, so the app ignored unstable frames.',
@@ -1029,8 +1031,18 @@ function normalizeVideoStatsNotes(videoStats) {
     }
     return null;
   }).filter(Boolean);
-  if ((videoStats?.framesWithRawLandmarks || 0) === 0) normalized.push(makeRecordingNote('no_body_detected'));
-  else if ((videoStats?.framesWithAnyVisiblePose || 0) < Math.max(8, Math.round((videoStats?.totalFramesSampled || 0) * 0.2))) normalized.push(makeRecordingNote('low_pose_confidence'));
+
+  if (videoStats?.modelLoaded === false) {
+    normalized.push(makeRecordingNote('model_load_failed'));
+  }
+
+  if ((videoStats?.framesWithRawLandmarks || 0) === 0 && (videoStats?.totalFramesSampled || 0) > 0) {
+    normalized.push(makeRecordingNote('no_body_detected'));
+  } else if ((videoStats?.framesWithRawLandmarks || 0) > 0
+    && (videoStats?.framesWithAnyVisiblePose || 0) < Math.max(8, Math.round((videoStats?.totalFramesSampled || 0) * 0.2))) {
+    normalized.push(makeRecordingNote('low_pose_confidence'));
+  }
+
   return normalized;
 }
 
@@ -1059,14 +1071,29 @@ function makeRecordingNote(code) {
 
 function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale) {
   const blockingReasons = [];
-  if (diagnostics.framesWithAnyPose < 30) blockingReasons.push('Too few frames with pose landmarks.');
-  if (diagnostics.usableFramePercentage < 0.5) blockingReasons.push('Usable frame percentage is below 50%.');
-  if (stableBodyScale.scaleUnstable && diagnostics.framesWithAnyPose < 45) blockingReasons.push('Body scale confidence is low with limited reliable frames.');
+  const personFrames = diagnostics.framesWithAnyPersonLikePose ?? diagnostics.framesWithAnyPose ?? 0;
+  const visibleFrames = diagnostics.framesWithAnyPose ?? 0;
+  const analyzableMetricCount = Object.values(analyzability || {}).filter((item) => item?.analyzable).length;
+
+  if (personFrames < 8) blockingReasons.push('Too few frames with a detectable person.');
+  if (diagnostics.usableFramePercentage < 0.1) blockingReasons.push('Usable person-detection percentage is below 10%.');
+
+  if (personFrames < 30 && analyzableMetricCount < 2) {
+    blockingReasons.push('Too few body frames were usable for multiple swing metrics.');
+  }
+
+  if (stableBodyScale.scaleUnstable && visibleFrames < 20) {
+    blockingReasons.push('Body scale confidence is low with limited reliable visible landmarks.');
+  }
+
   if (!Number.isFinite(detectedPhases.addressIndex)) blockingReasons.push('Address phase was not detected.');
   if (!Number.isFinite(detectedPhases.topIndex)) blockingReasons.push('Top of backswing was not detected.');
-  if (!analyzability.shoulderTurn?.analyzable && !analyzability.posture?.analyzable) blockingReasons.push('Shoulders were visible too rarely for major metrics.');
-  const analyzableMetricCount = Object.values(analyzability || {}).filter((item) => item?.analyzable).length;
-  if (analyzableMetricCount < 2) blockingReasons.push('Too few major metrics were analyzable from this recording.');
+  if (!analyzability.shoulderTurn?.analyzable && !analyzability.posture?.analyzable) {
+    blockingReasons.push('Shoulders were visible too rarely for major metrics.');
+  }
+  if (analyzableMetricCount < 1) {
+    blockingReasons.push('No major swing metric was analyzable from this recording.');
+  }
 
   const analyzable = blockingReasons.length === 0;
   return {
