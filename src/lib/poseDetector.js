@@ -109,6 +109,7 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       usableFramePercentage: sampleTimes.length ? framesWithAnyPose / sampleTimes.length : 0,
       visibleLandmarkFrequency: getVisibleLandmarkFrequency(missingLandmarkCounts, sampleTimes.length),
       mostOftenMissingLandmarks: getMostMissingLandmarks(missingLandmarkCounts),
+      videoDimensions: { width: video.videoWidth || null, height: video.videoHeight || null },
       finalReason: 'pose-detection-complete',
     };
     logPoseDetectionStats(stats);
@@ -191,6 +192,7 @@ function createEmptyStats(finalReason) {
     usableFramePercentage: 0,
     visibleLandmarkFrequency: [],
     mostOftenMissingLandmarks: [],
+    videoDimensions: null,
     finalReason,
   };
 }

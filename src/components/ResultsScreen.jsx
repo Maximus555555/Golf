@@ -4,6 +4,8 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
   const issues = analysis?.issues ?? [];
   const recordingQualityNotes = analysis?.recordingQualityNotes ?? [];
   const diagnostics = analysis?.diagnostics ?? {};
+  const measurements = analysis?.measurements ?? [];
+  const calibration = analysis?.calibration;
   const analyzedIssueCategories = diagnostics.analyzedIssueCategories ?? [];
   const showDebugPanel = import.meta.env.DEV && diagnostics.totalFramesSampled !== undefined;
 
@@ -27,6 +29,45 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
           <video src={replayUrl} controls playsInline className="replay-video" />
         </div>
       )}
+
+
+      <section className="results-section" aria-labelledby="estimated-measurements-heading">
+        <div className="section-heading-row">
+          <p className="eyebrow">Measured swing summary</p>
+          <h3 id="estimated-measurements-heading">Estimated measurements</h3>
+        </div>
+        <div className="measurements-card">
+          <p className="measurement-warning">
+            These measurements are estimates based on camera view, visible body landmarks, and any opening standing calibration. They are not professional biomechanics measurements.
+          </p>
+          {calibration?.enabled && calibration.status !== 'skipped' && (
+            <div className={`calibration-status ${calibration.status}`}>
+              <span>Calibration quality: {capitalize(calibration.status)}</span>
+              <small>{calibration.message}</small>
+            </div>
+          )}
+          <div className="measurement-list">
+            {measurements.length ? (
+              measurements.map((measurement) => (
+                <div className="measurement-row" key={measurement.id}>
+                  <div>
+                    <strong>{measurement.label}</strong>
+                    {measurement.bodyRelativeValue && measurement.bodyRelativeValue !== measurement.value && (
+                      <span>{measurement.bodyRelativeValue}</span>
+                    )}
+                  </div>
+                  <div>
+                    <b>{measurement.value}</b>
+                    <span>Tracking confidence: {measurement.reliability}</span>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="empty-note">Not enough reliable data for estimated measurements.</p>
+            )}
+          </div>
+        </div>
+      </section>
 
       {showDebugPanel && (
         <aside className="analysis-debug-panel" aria-label="Analysis debug stats">
@@ -125,4 +166,9 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
       </button>
     </section>
   );
+}
+
+function capitalize(value) {
+  if (!value) return 'Skipped';
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
 }

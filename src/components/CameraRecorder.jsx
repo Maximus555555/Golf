@@ -8,7 +8,7 @@ function supportedMimeType() {
   return types.find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
-export default function CameraRecorder({ onBack, onRecordingComplete }) {
+export default function CameraRecorder({ heightCalibration, onBack, onRecordingComplete }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
@@ -168,6 +168,9 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
           {isRecording && <div className="recording-badge">Recording · {secondsLeft}s</div>}
         </div>
 
+        {heightCalibration?.enabled && (
+          <p className="calibration-camera-instruction">Stand straight for the first 1–2 seconds, then swing.</p>
+        )}
         {cameraStatus === 'loading' && <p className="status-message">Starting camera...</p>}
         {error && <p className="error-message">{error}</p>}
         {!recordingSupported && (
@@ -198,6 +201,9 @@ export default function CameraRecorder({ onBack, onRecordingComplete }) {
       <div className="tips-card">
         <h2>Quick setup tips</h2>
         <p>Use bright light, keep the phone steady, and make one smooth swing inside the guide.</p>
+        {heightCalibration?.enabled && (
+          <p>For estimated measurements, start the video standing straight and still with your full body visible.</p>
+        )}
       </div>
     </section>
   );

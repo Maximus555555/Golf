@@ -19,13 +19,15 @@ export default function App() {
   const [analysis, setAnalysis] = useState(null);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisMessage, setAnalysisMessage] = useState('Preparing your swing analysis...');
+  const [heightCalibration, setHeightCalibration] = useState({ enabled: false, preferredUnit: 'in' });
 
   const replayUrl = useMemo(() => {
     if (!recording?.blob) return null;
     return URL.createObjectURL(recording.blob);
   }, [recording]);
 
-  const handleStartCamera = useCallback(() => {
+  const handleStartCamera = useCallback((calibrationSetup) => {
+    setHeightCalibration(calibrationSetup || { enabled: false, preferredUnit: 'in' });
     setScreen(SCREEN.camera);
   }, []);
 
@@ -40,11 +42,11 @@ export default function App() {
         onProgress: (progress) => setAnalysisProgress(progress),
       });
       setAnalysisMessage('Checking beginner swing patterns...');
-      const swingFeedback = analyzeSwing(poseTimeline, poseStats);
+      const swingFeedback = analyzeSwing(poseTimeline, poseStats, heightCalibration);
       setAnalysis({ ...swingFeedback, poseFrameCount: poseTimeline.length, error: null });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Pose analysis was unavailable for this recording.';
-      const fallbackFeedback = analyzeSwing([], { finalReason: errorMessage });
+      const fallbackFeedback = analyzeSwing([], { finalReason: errorMessage }, heightCalibration);
       setAnalysis({
         ...fallbackFeedback,
         poseFrameCount: 0,
@@ -54,7 +56,7 @@ export default function App() {
     } finally {
       setScreen(SCREEN.results);
     }
-  }, []);
+  }, [heightCalibration]);
 
   const handleRecordAgain = useCallback(() => {
     if (replayUrl) URL.revokeObjectURL(replayUrl);
@@ -76,7 +78,11 @@ export default function App() {
       {screen === SCREEN.landing && <LandingScreen onStart={handleStartCamera} />}
 
       {screen === SCREEN.camera && (
-        <CameraRecorder onBack={() => setScreen(SCREEN.landing)} onRecordingComplete={handleRecordingComplete} />
+        <CameraRecorder
+          heightCalibration={heightCalibration}
+          onBack={() => setScreen(SCREEN.landing)}
+          onRecordingComplete={handleRecordingComplete}
+        />
       )}
 
       {screen === SCREEN.analyzing && <AnalysisScreen progress={analysisProgress} message={analysisMessage} />}

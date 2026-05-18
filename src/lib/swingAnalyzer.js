@@ -1,4 +1,5 @@
 import { SEVERITY_SCORE, getCoachingResponse } from '../data/coachingResponses.js';
+import { convertNormalizedDistanceToRealWorld, estimateCalibrationScale } from './heightCalibration.js';
 
 const LANDMARK = {
   nose: 0,
@@ -218,7 +219,7 @@ function makeIssue(issueId, severity, confidence, movementDescription) {
   };
 }
 
-export function analyzeSwing(poseTimeline = [], videoStats = {}) {
+export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetup = { enabled: false }) {
   const metrics = poseTimeline.map((frame, index) => ({ ...frameMetrics(frame), frameIndex: index }));
   const totalFramesSampled = videoStats.totalFramesSampled ?? videoStats.totalFrames ?? poseTimeline.length;
   const framesWithAnyPose = videoStats.framesWithAnyPose ?? metrics.filter((metric) => metric.hasAnyLandmark).length;
@@ -232,6 +233,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
     visibleLandmarkFrequency,
     mostOftenMissingLandmarks: videoStats.mostOftenMissingLandmarks ?? getMissingLandmarkSummary(poseTimeline),
   };
+  const calibration = buildCalibrationResult(calibrationSetup, poseTimeline, videoStats);
   const failureReason = getFullFailureReason(diagnostics);
 
   if (failureReason) {
@@ -239,7 +241,9 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
     logAnalysisStats(failureDiagnostics);
     return {
       issues: [],
-      recordingQualityNotes: [makeRecordingNote('too_few_usable_frames')],
+      recordingQualityNotes: addCalibrationQualityNotes([makeRecordingNote('too_few_usable_frames')], calibration),
+      measurements: createSwingMeasurements({}, null, calibration, calibrationSetup),
+      calibration,
       summary: 'The recording quality was too limited for reliable swing feedback. Please record again before using the swing notes.',
       diagnostics: failureDiagnostics,
       fullFailure: true,
@@ -275,7 +279,10 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
     finishBalance: makeAnalyzability(finishBalanceMetrics, 'Hips, knees, and ankles or feet were not visible often enough.'),
   };
   const skippedIssueCategories = getSkippedIssueCategories(analyzability);
-  const recordingQualityNotes = getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale);
+  const recordingQualityNotes = addCalibrationQualityNotes(
+    getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale),
+    calibration,
+  );
   const detectedIssues = [];
 
   let maxHeadMove = null;
@@ -419,6 +426,13 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
 
   const topIssues = rankIssues(removeDuplicateIssues(detectedIssues)).slice(0, 3);
   const analyzedIssueCategories = getAnalyzedIssueCategories(analyzability);
+  const movementMeasurements = {
+    headMovement: { ratio: percentileHeadMove, normalizedDistance: multiplyFinite(percentileHeadMove, stableBodyScale.scale), analyzability: analyzability.headMovement },
+    postureRise: { ratio: postureRise, normalizedDistance: multiplyFinite(postureRise, stableBodyScale.scale), analyzability: analyzability.posture },
+    hipSway: { ratio: percentileHipSway, normalizedDistance: multiplyFinite(percentileHipSway, stableBodyScale.scale), analyzability: analyzability.hipSway },
+  };
+  const measurements = createSwingMeasurements(movementMeasurements, stableBodyScale, calibration, calibrationSetup);
+
   const finalDiagnostics = {
     ...diagnostics,
     analyzableFrameCounts: {
@@ -453,12 +467,114 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}) {
   return {
     issues: topIssues,
     recordingQualityNotes,
+    calibration,
+    measurements,
     summary: topIssues.length
       ? 'Here are the top swing patterns detected from your visible body movement.'
       : 'No major beginner swing issue was detected from the visible movement in this recording.',
     diagnostics: finalDiagnostics,
     fullFailure: false,
   };
+}
+
+function buildCalibrationResult(calibrationSetup, poseTimeline, videoStats) {
+  if (!calibrationSetup?.enabled) {
+    return {
+      enabled: false,
+      status: 'skipped',
+      inputHeightCm: null,
+      scaleCmPerNormalizedUnit: null,
+      message: 'Height calibration was skipped; body-relative measurements are shown.',
+    };
+  }
+
+  return estimateCalibrationScale({
+    inputHeightCm: calibrationSetup.inputHeightCm,
+    poseTimeline,
+    videoDimensions: videoStats.videoDimensions ?? null,
+  });
+}
+
+function createSwingMeasurements(movementMeasurements, stableBodyScale, calibration, calibrationSetup = {}) {
+  const preferredUnit = calibrationSetup.preferredUnit || 'in';
+  const realWorldAllowed = calibration?.enabled && ['good', 'fair'].includes(calibration.status);
+  const limitedCalibration = calibration?.enabled && calibration.status === 'limited';
+  const entries = [
+    { id: 'head_movement', label: 'Estimated head movement', metric: movementMeasurements.headMovement },
+    { id: 'posture_rise', label: 'Estimated posture rise', metric: movementMeasurements.postureRise },
+    { id: 'hip_sway', label: 'Estimated hip sway', metric: movementMeasurements.hipSway },
+  ];
+
+  return entries.map((entry) => {
+    const reliability = getMeasurementReliability(entry.metric, calibration);
+    const bodyRelativeValue = formatBodyRelative(entry.metric?.ratio);
+    return {
+      id: entry.id,
+      label: entry.label,
+      value: realWorldAllowed
+        ? formatRealWorldMeasurement(entry.metric?.normalizedDistance, calibration, preferredUnit)
+        : limitedCalibration
+          ? formatLimitedRealWorldRange(entry.metric?.normalizedDistance, calibration, preferredUnit)
+          : bodyRelativeValue,
+      bodyRelativeValue,
+      reliability,
+    };
+  });
+}
+
+function getMeasurementReliability(metric, calibration) {
+  if (!metric?.analyzability?.analyzable || !Number.isFinite(metric?.ratio)) return 'Poor';
+  if (calibration?.status === 'good') return 'Good';
+  if (calibration?.status === 'fair' || calibration?.status === 'limited') return 'Fair';
+  return 'Fair';
+}
+
+function formatBodyRelative(ratio) {
+  if (!Number.isFinite(ratio) || ratio < 0 || ratio > 1.2) return 'Not enough reliable data';
+  return `${ratio.toFixed(2)} body-widths`;
+}
+
+function formatRealWorldMeasurement(normalizedDistance, calibration, preferredUnit) {
+  const converted = convertNormalizedDistanceToRealWorld(normalizedDistance, calibration, preferredUnit);
+  return converted ? converted.label : 'Not enough reliable data';
+}
+
+function formatLimitedRealWorldRange(normalizedDistance, calibration, preferredUnit) {
+  const converted = convertNormalizedDistanceToRealWorld(normalizedDistance, calibration, preferredUnit);
+  if (!converted) return 'Not enough reliable data';
+  const value = converted.value;
+  const unitLabel = preferredUnit === 'cm' ? 'cm' : 'inches';
+  const lowThreshold = preferredUnit === 'cm' ? 7.5 : 3;
+  const highThreshold = preferredUnit === 'cm' ? 15 : 6;
+  if (value < lowThreshold) return `less than ${Math.round(lowThreshold)} ${unitLabel}`;
+  if (value > highThreshold) return `more than ${Math.round(highThreshold)} ${unitLabel}`;
+  const roundedLow = Math.max(0, Math.round((value * 0.75) / 2) * 2);
+  const roundedHigh = Math.max(roundedLow + 2, Math.round((value * 1.25) / 2) * 2);
+  return `about ${roundedLow}–${roundedHigh} ${unitLabel}`;
+}
+
+function multiplyFinite(a, b) {
+  return Number.isFinite(a) && Number.isFinite(b) ? a * b : null;
+}
+
+function addCalibrationQualityNotes(notes, calibration) {
+  if (!calibration?.enabled) return notes;
+  if (calibration.status === 'failed') {
+    return [
+      ...notes,
+      {
+        code: 'height_calibration_failed',
+        message: 'Height calibration could not be completed because the app could not clearly read your standing position. Swing feedback was still generated from visible movement.',
+      },
+    ];
+  }
+  if (calibration.status === 'limited') {
+    return [
+      ...notes,
+      { code: 'height_calibration_limited', message: 'Height calibration was limited, so measurements are approximate ranges.' },
+    ];
+  }
+  return notes;
 }
 
 function getFullFailureReason(diagnostics) {
