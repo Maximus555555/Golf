@@ -16,6 +16,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
   const countdownRef = useRef(null);
+  const isMountedRef = useRef(false);
   const [cameraStatus, setCameraStatus] = useState('idle');
   const [error, setError] = useState('');
   const [isRecording, setIsRecording] = useState(false);
@@ -52,6 +53,11 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
         stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: true });
       }
 
+      if (!isMountedRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -60,6 +66,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
       setRecordingSupported(Boolean(window.MediaRecorder));
       setCameraStatus('ready');
     } catch (cameraError) {
+      if (!isMountedRef.current) return;
       setCameraStatus('error');
       if (cameraError?.name === 'NotAllowedError' || cameraError?.name === 'SecurityError') {
         setError('Camera permission was denied. Allow camera access in Safari settings, then try again.');
@@ -72,8 +79,10 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
   }, []);
 
   useEffect(() => {
+    isMountedRef.current = true;
     startCamera();
     return () => {
+      isMountedRef.current = false;
       window.clearTimeout(timerRef.current);
       window.clearInterval(countdownRef.current);
       stopStream();
@@ -127,7 +136,14 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     setError('');
     setSecondsLeft(6);
     const mimeType = supportedMimeType();
-    const recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
+    let recorder;
+    try {
+      recorder = new MediaRecorder(streamRef.current, mimeType ? { mimeType } : undefined);
+    } catch {
+      setRecordingSupported(false);
+      setError('Video recording could not start in this browser. Try the latest iPhone Safari or Chrome.');
+      return;
+    }
     recorderRef.current = recorder;
 
     recorder.ondataavailable = (event) => {
@@ -135,6 +151,8 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     };
 
     recorder.onerror = () => {
+      window.clearTimeout(timerRef.current);
+      window.clearInterval(countdownRef.current);
       setIsRecording(false);
       setError('Recording stopped unexpectedly. Please try recording again.');
     };
@@ -151,7 +169,13 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
       onRecordingComplete({ blob, mimeType: blob.type, durationMs: MAX_RECORDING_MS });
     };
 
-    recorder.start(250);
+    try {
+      recorder.start(250);
+    } catch {
+      recorderRef.current = null;
+      setError('Video recording could not start. Please restart the camera and try again.');
+      return;
+    }
     setIsRecording(true);
     timerRef.current = window.setTimeout(stopRecording, MAX_RECORDING_MS);
     countdownRef.current = window.setInterval(() => {

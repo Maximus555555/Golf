@@ -8,19 +8,24 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
   const calibration = analysis?.calibration;
   const analyzedIssueCategories = diagnostics.analyzedIssueCategories ?? [];
   const showDebugPanel = import.meta.env.DEV && diagnostics.totalFramesSampled !== undefined;
+  const resultsTitle = analysis?.fullFailure
+    ? 'Recording needs another try'
+    : issues.length
+      ? 'Your top swing notes'
+      : 'No major swing issue detected';
 
   return (
     <section className="screen results-screen">
       <div className="results-header-card">
         <p className="eyebrow">Swing results</p>
-        <h2>{issues.length ? 'Your top swing notes' : 'No major swing issue detected'}</h2>
+        <h2>{resultsTitle}</h2>
         <p>{analysis?.summary}</p>
         {analysis?.fullFailure && (
           <p className="inline-warning">
             We could not read enough body landmarks from this recording. Try brighter light, a steady camera, and keeping more of your body in view.
           </p>
         )}
-        {analysis?.error && <p className="debug-error">Debug detail: {analysis.error}</p>}
+        {showDebugPanel && analysis?.error && <p className="debug-error">Debug detail: {analysis.error}</p>}
       </div>
 
       {replayUrl && (

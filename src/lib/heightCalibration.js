@@ -167,9 +167,10 @@ function getFallbackBodyHeightSample(frame) {
   const hipCenter = midpoint(visible(frame, LANDMARK.leftHip), visible(frame, LANDMARK.rightHip));
   if (!head || (!hipCenter && !shoulderCenter)) return null;
 
-  let estimatedHeight = null;
-  if (hipCenter) estimatedHeight = Math.abs(hipCenter.y - head.y) / HEAD_TO_HIP_BODY_RATIO;
-  else if (shoulderCenter && hipCenter) estimatedHeight = Math.abs(hipCenter.y - shoulderCenter.y) / SHOULDER_TO_HIP_BODY_RATIO;
+  const estimates = [];
+  if (hipCenter) estimates.push(Math.abs(hipCenter.y - head.y) / HEAD_TO_HIP_BODY_RATIO);
+  if (shoulderCenter && hipCenter) estimates.push(Math.abs(hipCenter.y - shoulderCenter.y) / SHOULDER_TO_HIP_BODY_RATIO);
+  const estimatedHeight = median(estimates);
 
   if (!Number.isFinite(estimatedHeight) || estimatedHeight < 0.2 || estimatedHeight > 1.4) return null;
   return {
