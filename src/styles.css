@@ -523,3 +523,166 @@ button {
   margin: 2px 0 0;
   font-weight: 900;
 }
+
+.height-calibration-panel {
+  display: grid;
+  gap: 14px;
+  position: relative;
+  z-index: 1;
+  border: 1px solid rgba(15, 61, 46, 0.12);
+  border-radius: 24px;
+  padding: 16px;
+  background: rgba(245, 251, 247, 0.82);
+}
+
+.unit-toggle,
+.calibration-actions,
+.camera-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.unit-toggle {
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+  border-radius: 18px;
+  background: #dfeee5;
+}
+
+.unit-option {
+  min-height: 44px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: #315648;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.unit-option.selected {
+  background: #ffffff;
+  color: #126c43;
+  box-shadow: 0 8px 18px rgba(15, 61, 46, 0.12);
+}
+
+.height-fields {
+  display: grid;
+  gap: 12px;
+}
+
+.height-fields.two-column {
+  grid-template-columns: 1fr 1fr;
+}
+
+.height-fields label {
+  display: grid;
+  gap: 7px;
+  color: #315648;
+  font-size: 0.9rem;
+  font-weight: 850;
+}
+
+.height-fields input {
+  width: 100%;
+  min-height: 54px;
+  border: 1px solid rgba(15, 61, 46, 0.18);
+  border-radius: 16px;
+  padding: 12px 14px;
+  background: white;
+  color: #10241c;
+  font: inherit;
+  font-size: 1.08rem;
+}
+
+.calibration-instruction,
+.calibration-camera-instruction,
+.measurement-warning {
+  margin: 0;
+  border-radius: 18px;
+  padding: 13px 14px;
+  background: #e1f4e9;
+  color: #1a5a3a;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.calibration-camera-instruction {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.calibration-actions {
+  grid-template-columns: 1fr;
+}
+
+.measurements-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid rgba(15, 61, 46, 0.12);
+  border-radius: 24px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.measurement-list {
+  display: grid;
+  gap: 10px;
+}
+
+.measurement-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  border: 1px solid rgba(15, 61, 46, 0.1);
+  border-radius: 18px;
+  padding: 14px;
+  background: #f8fcf9;
+}
+
+.measurement-row > div {
+  display: grid;
+  gap: 3px;
+}
+
+.measurement-row strong,
+.measurement-row b {
+  color: #143d30;
+}
+
+.measurement-row span,
+.measurement-row small,
+.calibration-status small {
+  color: #4a6b5d;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.calibration-status {
+  display: grid;
+  gap: 3px;
+  border-radius: 18px;
+  padding: 12px 14px;
+  background: #eef7f1;
+  color: #174f36;
+  font-weight: 900;
+}
+
+.calibration-status.failed,
+.calibration-status.limited {
+  background: #fff5df;
+  color: #77520e;
+}
+
+@media (min-width: 560px) {
+  .calibration-actions,
+  .camera-actions,
+  .measurement-row {
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+  }
+
+  .measurement-row > div:last-child {
+    justify-items: end;
+    text-align: right;
+  }
+}
