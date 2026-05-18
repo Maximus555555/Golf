@@ -70,6 +70,8 @@ const RECORDING_QUALITY_WARNINGS = {
   lower_body_limited: 'Your lower body was not fully visible, so finish-balance feedback may be limited.',
   camera_too_shaky: 'The camera appears to move during the swing. Place the phone on a stable surface for better feedback.',
   too_few_usable_frames: 'The app could not read enough visible body landmarks. Try recording again in brighter light with a steadier camera.',
+  low_pose_confidence: 'Pose landmarks were found, but confidence was low. Move the phone closer, keep the full body visible, and avoid motion blur.',
+  no_body_detected: 'The pose model did not find a body in the sampled frames. Try recording from farther back with your whole body visible.',
   wrong_distance: 'The camera may be too close. Move the phone farther back so your whole body stays in frame.',
   unstable_tracking_points: 'Some body-tracking points jumped during the video, so the app ignored unstable frames.',
   unstable_movement_scale: 'Body size changed during tracking, so the app used a safer estimate for movement scale.',
@@ -250,16 +252,30 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   const detectedPhases = detectSwingPhases(poseTimeline, { videoStats, calibrationSetup });
   const metrics = phaseDetection.frames.map((frame, index) => ({ ...frameMetrics(frame), frameIndex: index, timestampMs: frame.timestampMs, phase: frame.phase }));
   const totalFramesSampled = videoStats.totalFramesSampled ?? videoStats.totalFrames ?? poseTimeline.length;
-  const framesWithAnyPose = videoStats.framesWithAnyPose ?? metrics.filter((metric) => metric.hasAnyLandmark).length;
-  const usableFramePercentage = totalFramesSampled ? framesWithAnyPose / totalFramesSampled : 0;
+  const framesWithAnyPose = videoStats.framesWithAnyVisiblePose ?? videoStats.framesWithAnyPose ?? metrics.filter((metric) => metric.hasAnyLandmark).length;
+  const framesWithAnyPersonLikePose = videoStats.framesWithAnyPersonLikePose ?? framesWithAnyPose;
+  const usableFramePercentage = totalFramesSampled ? framesWithAnyPersonLikePose / totalFramesSampled : 0;
   const visibleLandmarkFrequency = videoStats.visibleLandmarkFrequency ?? getVisibleLandmarkFrequency(poseTimeline, totalFramesSampled);
   const diagnostics = {
     totalFramesSampled,
     framesWherePoseDetectionRan: videoStats.framesWherePoseDetectionRan ?? totalFramesSampled,
     framesWithAnyPose,
+    framesWithAnyPersonLikePose,
     usableFramePercentage,
     visibleLandmarkFrequency,
     mostOftenMissingLandmarks: videoStats.mostOftenMissingLandmarks ?? getMissingLandmarkSummary(poseTimeline),
+    modelLoaded: videoStats.modelLoaded ?? false,
+    wasmBase: videoStats.wasmBase ?? null,
+    modelUrl: videoStats.modelUrl ?? null,
+    videoDimensions: videoStats.videoDimensions ?? null,
+    durationUsed: videoStats.durationUsed ?? null,
+    sampleTimesCount: videoStats.sampleTimesCount ?? totalFramesSampled,
+    framesWithRawLandmarks: videoStats.framesWithRawLandmarks ?? 0,
+    framesWithAnyVisiblePose: videoStats.framesWithAnyVisiblePose ?? framesWithAnyPose,
+    framesUsingFallback: videoStats.framesUsingFallback ?? 0,
+    fallbackFrameRatio: videoStats.fallbackFrameRatio ?? 0,
+    firstDetectionError: videoStats.firstDetectionError ?? null,
+    finalReason: videoStats.finalReason ?? null,
   };
   const calibration = buildCalibrationResult(calibrationSetup, phaseDetection, poseTimeline, videoStats);
   const failureReason = getFullFailureReason(diagnostics);
@@ -841,8 +857,8 @@ function addCalibrationQualityNotes(notes, calibration) {
 }
 
 function getFullFailureReason(diagnostics) {
-  if (diagnostics.framesWithAnyPose < FULL_FAILURE_MIN_ANY_POSE_FRAMES) return 'fewer-than-8-pose-frames';
-  if (diagnostics.usableFramePercentage < FULL_FAILURE_MIN_USABLE_RATIO) return 'less-than-10-percent-usable-pose-frames';
+  if (diagnostics.framesWithAnyPersonLikePose < FULL_FAILURE_MIN_ANY_POSE_FRAMES) return 'fewer-than-8-person-like-pose-frames';
+  if (diagnostics.usableFramePercentage < FULL_FAILURE_MIN_USABLE_RATIO) return 'less-than-10-percent-person-like-pose-frames';
   return '';
 }
 
@@ -1004,7 +1020,7 @@ function getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierRe
 
 
 function normalizeVideoStatsNotes(videoStats) {
-  return (videoStats?.recordingQualityNotes || []).map((note, index) => {
+  const normalized = (videoStats?.recordingQualityNotes || []).map((note, index) => {
     if (typeof note === 'string') {
       return { code: `pose_detector_${index}`, message: note };
     }
@@ -1013,6 +1029,9 @@ function normalizeVideoStatsNotes(videoStats) {
     }
     return null;
   }).filter(Boolean);
+  if ((videoStats?.framesWithRawLandmarks || 0) === 0) normalized.push(makeRecordingNote('no_body_detected'));
+  else if ((videoStats?.framesWithAnyVisiblePose || 0) < Math.max(8, Math.round((videoStats?.totalFramesSampled || 0) * 0.2))) normalized.push(makeRecordingNote('low_pose_confidence'));
+  return normalized;
 }
 
 function mergeRecordingQualityNotes(...noteGroups) {

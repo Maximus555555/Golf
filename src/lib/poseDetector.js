@@ -6,7 +6,8 @@ const MAX_ANALYSIS_SECONDS = 6;
 const TARGET_SAMPLE_FPS = 15;
 const MIN_SAMPLED_FRAMES = 45;
 const MAX_SAMPLED_FRAMES = 120;
-const MIN_VISIBILITY = 0.45;
+const MIN_ANY_PERSON_VISIBILITY = 0.2;
+const MIN_RELIABLE_LANDMARK_VISIBILITY = 0.45;
 const DEFAULT_POSE_CONFIDENCE = 0.5;
 const FALLBACK_POSE_CONFIDENCE = 0.4;
 const CONFIDENCE_RETRY_FAILURE_RATIO = 0.55;
@@ -36,28 +37,10 @@ let fallbackLandmarkerPromise;
 
 export async function createPoseDetector() {
   if (!landmarkerPromise) {
-    landmarkerPromise = FilesetResolver.forVisionTasks(WASM_BASE).then((vision) =>
-      PoseLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: MODEL_URL,
-          delegate: 'GPU',
-        },
-        runningMode: 'VIDEO',
-        numPoses: 1,
-        minPoseDetectionConfidence: DEFAULT_POSE_CONFIDENCE,
-        minPosePresenceConfidence: DEFAULT_POSE_CONFIDENCE,
-        minTrackingConfidence: DEFAULT_POSE_CONFIDENCE,
-      }).catch(async () =>
-        PoseLandmarker.createFromOptions(vision, {
-          baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
-          runningMode: 'VIDEO',
-          numPoses: 1,
-          minPoseDetectionConfidence: DEFAULT_POSE_CONFIDENCE,
-          minPosePresenceConfidence: DEFAULT_POSE_CONFIDENCE,
-          minTrackingConfidence: DEFAULT_POSE_CONFIDENCE,
-        }),
-      ),
-    );
+    landmarkerPromise = createPrimaryPoseDetector().catch((error) => {
+      landmarkerPromise = null;
+      throw error;
+    });
   }
 
   const landmarker = await landmarkerPromise;
@@ -71,8 +54,6 @@ export async function createPoseDetector() {
 
 export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
   if (!videoBlob) return { timeline: [], stats: createEmptyStats('missing-video-blob') };
-
-  const detector = await createPoseDetector();
   const video = document.createElement('video');
   video.muted = true;
   video.playsInline = true;
@@ -80,28 +61,47 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
   video.src = URL.createObjectURL(videoBlob);
 
   try {
+    const detector = await createPoseDetector();
     await waitForMetadata(video);
     await waitForCanPlay(video);
     const duration = Math.min(getFiniteDuration(video.duration), MAX_ANALYSIS_SECONDS);
     const sampleTimes = createSampleTimes(duration);
+    const frameCanvas = document.createElement('canvas');
+    const frameCtx = frameCanvas.getContext('2d', { willReadFrequently: true });
     const timeline = [];
     const missingLandmarkCounts = new Map(DEBUG_LANDMARKS.map(({ name }) => [name, 0]));
     let framesWherePoseDetectionRan = 0;
     let framesWithAnyPose = 0;
+    let framesWithRawLandmarks = 0;
+    let framesWithAnyPersonLikePose = 0;
     const recordingQualityNotes = [];
     let fallbackDetector = null;
     let framesUsingFallback = 0;
+    let firstDetectionError = null;
 
     for (const [index, time] of sampleTimes.entries()) {
       await seekVideo(video, time);
+      await waitForVideoFrame(video);
       framesWherePoseDetectionRan += 1;
       const timestampMs = Math.round(time * 1000);
-      let landmarks = await detector.detectForVideo(video, timestampMs);
-      if (!landmarks?.length) {
+      const frameSource = drawVideoFrameToCanvas(video, frameCanvas, frameCtx) || video;
+      let landmarks = null;
+      try {
+        landmarks = await detector.detectForVideo(frameSource, timestampMs);
+      } catch (error) {
+        if (!firstDetectionError) firstDetectionError = error instanceof Error ? error.message : String(error);
+      }
+      if (landmarks?.length) framesWithRawLandmarks += 1;
+      if (hasAnyPersonLikePose(landmarks)) framesWithAnyPersonLikePose += 1;
+      const shouldRetryFallback = !landmarks?.length || !hasAnyVisibleLandmark(landmarks) || !hasAnyPersonLikePose(landmarks);
+      if (shouldRetryFallback) {
         if (!fallbackDetector) fallbackDetector = await createFallbackPoseDetector();
-        landmarks = await fallbackDetector.detectForVideo(video, timestampMs);
+        const fallbackLandmarks = await fallbackDetector.detectForVideo(frameSource, timestampMs);
+        landmarks = fallbackLandmarks?.length ? fallbackLandmarks : landmarks;
         if (landmarks?.length) {
           framesUsingFallback += 1;
+          framesWithRawLandmarks += 1;
+          if (hasAnyPersonLikePose(landmarks)) framesWithAnyPersonLikePose += 1;
         }
       }
 
@@ -126,13 +126,22 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
     }
 
     const stats = {
+      modelLoaded: true,
+      wasmBase: WASM_BASE,
+      modelUrl: MODEL_URL,
       totalFramesSampled: sampleTimes.length,
       framesWherePoseDetectionRan,
+      framesWithRawLandmarks,
+      framesWithAnyPersonLikePose,
+      framesWithAnyVisiblePose: framesWithAnyPose,
       framesWithAnyPose,
       usableFramePercentage: sampleTimes.length ? framesWithAnyPose / sampleTimes.length : 0,
       visibleLandmarkFrequency: getVisibleLandmarkFrequency(missingLandmarkCounts, sampleTimes.length),
       mostOftenMissingLandmarks: getMostMissingLandmarks(missingLandmarkCounts),
       videoDimensions: { width: video.videoWidth || null, height: video.videoHeight || null },
+      durationUsed: duration,
+      sampleTimesCount: sampleTimes.length,
+      firstDetectionError,
       finalReason: 'pose-detection-complete',
       fallbackFrameRatio,
       framesUsingFallback,
@@ -145,9 +154,49 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
     console.warn('[SwingFix] Pose analysis failed before swing checks', {
       finalReason: error instanceof Error ? error.message : 'unknown-pose-processing-error',
     });
-    throw error;
+    return {
+      timeline: [],
+      stats: {
+        ...createEmptyStats('pose-analysis-error'),
+        modelLoaded: false,
+        wasmBase: WASM_BASE,
+        modelUrl: MODEL_URL,
+        firstDetectionError: error instanceof Error ? error.message : String(error),
+        finalReason: 'pose-analysis-error',
+      },
+      error,
+    };
   } finally {
     URL.revokeObjectURL(video.src);
+  }
+}
+
+async function createPrimaryPoseDetector() {
+  try {
+    const vision = await FilesetResolver.forVisionTasks(WASM_BASE);
+    const landmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate: 'GPU' },
+      runningMode: 'VIDEO',
+      numPoses: 1,
+      minPoseDetectionConfidence: DEFAULT_POSE_CONFIDENCE,
+      minPosePresenceConfidence: DEFAULT_POSE_CONFIDENCE,
+      minTrackingConfidence: DEFAULT_POSE_CONFIDENCE,
+    }).catch(() => PoseLandmarker.createFromOptions(vision, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
+      runningMode: 'VIDEO',
+      numPoses: 1,
+      minPoseDetectionConfidence: DEFAULT_POSE_CONFIDENCE,
+      minPosePresenceConfidence: DEFAULT_POSE_CONFIDENCE,
+      minTrackingConfidence: DEFAULT_POSE_CONFIDENCE,
+    }));
+    return {
+      async detectForVideo(source, timestampMs) {
+        const result = landmarker.detectForVideo(source, timestampMs);
+        return result.landmarks?.[0] ?? null;
+      },
+    };
+  } catch {
+    throw new Error('MediaPipe pose model could not load. Check internet access or external MediaPipe asset URLs.');
   }
 }
 
@@ -198,7 +247,11 @@ function getFiniteDuration(duration) {
 }
 
 function isVisible(landmark) {
-  return Boolean(landmark) && (landmark.visibility ?? 1) >= MIN_VISIBILITY;
+  return Boolean(landmark) && (landmark.visibility ?? 1) >= MIN_ANY_PERSON_VISIBILITY;
+}
+
+function isReliable(landmark) {
+  return Boolean(landmark) && (landmark.visibility ?? 1) >= MIN_RELIABLE_LANDMARK_VISIBILITY;
 }
 
 function hasAnyVisibleLandmark(landmarks) {
@@ -207,9 +260,15 @@ function hasAnyVisibleLandmark(landmarks) {
 
 function recordMissingLandmarks(landmarks, missingLandmarkCounts) {
   DEBUG_LANDMARKS.forEach(({ name, index }) => {
-    if (!isVisible(landmarks[index])) {
+    if (!isReliable(landmarks[index])) {
       missingLandmarkCounts.set(name, (missingLandmarkCounts.get(name) || 0) + 1);
     }
+  });
+}
+function hasAnyPersonLikePose(landmarks) {
+  return DEBUG_LANDMARKS.some(({ index }) => {
+    const lm = landmarks?.[index];
+    return lm && Number.isFinite(lm.x) && Number.isFinite(lm.y);
   });
 }
 
@@ -246,13 +305,24 @@ function logPoseDetectionStats(stats) {
 
 function createEmptyStats(finalReason) {
   return {
+    modelLoaded: false,
+    wasmBase: WASM_BASE,
+    modelUrl: MODEL_URL,
     totalFramesSampled: 0,
+    sampleTimesCount: 0,
+    durationUsed: 0,
     framesWherePoseDetectionRan: 0,
+    framesWithRawLandmarks: 0,
+    framesWithAnyPersonLikePose: 0,
+    framesWithAnyVisiblePose: 0,
     framesWithAnyPose: 0,
     usableFramePercentage: 0,
     visibleLandmarkFrequency: [],
     mostOftenMissingLandmarks: [],
     videoDimensions: null,
+    framesUsingFallback: 0,
+    fallbackFrameRatio: 0,
+    firstDetectionError: null,
     finalReason,
   };
 }
@@ -321,6 +391,30 @@ function seekVideo(video, time) {
     video.addEventListener('error', handleError, { once: true });
     video.currentTime = clampedTime;
   });
+}
+
+async function waitForVideoFrame(video) {
+  if ('requestVideoFrameCallback' in video) {
+    await new Promise((resolve) => {
+      video.requestVideoFrameCallback(() => resolve());
+    });
+    return;
+  }
+  await new Promise((resolve) => window.setTimeout(resolve, 80));
+}
+
+function drawVideoFrameToCanvas(video, canvas, ctx) {
+  try {
+    const width = video.videoWidth || 640;
+    const height = video.videoHeight || 360;
+    if (!width || !height || !ctx) return null;
+    canvas.width = width;
+    canvas.height = height;
+    ctx.drawImage(video, 0, 0, width, height);
+    return canvas;
+  } catch {
+    return null;
+  }
 }
 
 // First-pass fallback note for maintainers: if MediaPipe cannot initialize in a
