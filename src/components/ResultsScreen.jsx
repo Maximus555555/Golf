@@ -1,6 +1,9 @@
+import { useEffect, useRef, useState } from 'react';
 import FeedbackCard from './FeedbackCard.jsx';
 
 export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
+  const [selectedSpeed, setSelectedSpeed] = useState(1);
+  const replayVideoRef = useRef(null);
   const issues = analysis?.issues ?? [];
   const recordingQualityNotes = analysis?.recordingQualityNotes ?? [];
   const diagnostics = analysis?.diagnostics ?? {};
@@ -13,6 +16,22 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
     : issues.length
       ? 'Your top swing notes'
       : 'No major swing issue detected';
+
+  useEffect(() => {
+    const replayVideo = replayVideoRef.current;
+    if (!replayVideo) return;
+    replayVideo.playbackRate = selectedSpeed;
+  }, [selectedSpeed]);
+
+  const handleReplayMetadataLoaded = () => {
+    if (!replayVideoRef.current) return;
+    replayVideoRef.current.playbackRate = selectedSpeed;
+  };
+
+  const handleReplayPlay = () => {
+    if (!replayVideoRef.current) return;
+    replayVideoRef.current.playbackRate = selectedSpeed;
+  };
 
   return (
     <section className="screen results-screen">
@@ -31,7 +50,32 @@ export default function ResultsScreen({ analysis, replayUrl, onRecordAgain }) {
       {replayUrl && (
         <div className="replay-card">
           <h3>Replay your swing</h3>
-          <video src={replayUrl} controls playsInline className="replay-video" />
+          <video
+            ref={replayVideoRef}
+            src={replayUrl}
+            controls
+            playsInline
+            className="replay-video"
+            onLoadedMetadata={handleReplayMetadataLoaded}
+            onPlay={handleReplayPlay}
+          />
+          <div className="replay-speed" aria-label="Replay speed controls">
+            <p className="replay-speed__title">Replay speed</p>
+            <div className="replay-speed__buttons" role="group" aria-label="Replay speed">
+              {[1, 0.5, 0.25].map((speed) => (
+                <button
+                  key={speed}
+                  type="button"
+                  className={`speed-button${selectedSpeed === speed ? ' active' : ''}`}
+                  onClick={() => setSelectedSpeed(speed)}
+                  aria-pressed={selectedSpeed === speed}
+                >
+                  {speed}x
+                </button>
+              ))}
+            </div>
+            <p className="replay-speed__help">Use slow motion to review your setup, backswing, and finish.</p>
+          </div>
         </div>
       )}
 
