@@ -280,6 +280,9 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
         
         <div className="setup-card"> 
           <p><strong>Record from the correct angle with your full body visible.</strong></p>
+          <p>{captureSetup?.view === 'down-the-line'
+            ? 'Place the phone behind your hands, looking toward the target, with your full body and club visible.'
+            : 'Place the phone in front of you, with your full body and club visible.'}</p>
           <label>Camera
             {cameraOptions.length > 1 && (
               <select value={selectedDeviceId} onChange={handleCameraChange} className="camera-select">

@@ -3,10 +3,13 @@ import { FilesetResolver, PoseLandmarker } from '@mediapipe/tasks-vision';
 const WASM_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22-rc.20250304/wasm';
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/latest/pose_landmarker_lite.task';
 const MAX_ANALYSIS_SECONDS = 6;
-const TARGET_SAMPLE_FPS = 5;
-const MIN_SAMPLED_FRAMES = 20;
-const MAX_SAMPLED_FRAMES = 40;
+const TARGET_SAMPLE_FPS = 15;
+const MIN_SAMPLED_FRAMES = 45;
+const MAX_SAMPLED_FRAMES = 120;
 const MIN_VISIBILITY = 0.45;
+const DEFAULT_POSE_CONFIDENCE = 0.5;
+const FALLBACK_POSE_CONFIDENCE = 0.4;
+const CONFIDENCE_RETRY_FAILURE_RATIO = 0.55;
 
 const DEBUG_LANDMARKS = [
   { name: 'nose', index: 0 },
@@ -40,17 +43,17 @@ export async function createPoseDetector() {
         },
         runningMode: 'VIDEO',
         numPoses: 1,
-        minPoseDetectionConfidence: 0.35,
-        minPosePresenceConfidence: 0.35,
-        minTrackingConfidence: 0.35,
+        minPoseDetectionConfidence: DEFAULT_POSE_CONFIDENCE,
+        minPosePresenceConfidence: DEFAULT_POSE_CONFIDENCE,
+        minTrackingConfidence: DEFAULT_POSE_CONFIDENCE,
       }).catch(async () =>
         PoseLandmarker.createFromOptions(vision, {
           baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
           runningMode: 'VIDEO',
           numPoses: 1,
-          minPoseDetectionConfidence: 0.35,
-          minPosePresenceConfidence: 0.35,
-          minTrackingConfidence: 0.35,
+          minPoseDetectionConfidence: DEFAULT_POSE_CONFIDENCE,
+          minPosePresenceConfidence: DEFAULT_POSE_CONFIDENCE,
+          minTrackingConfidence: DEFAULT_POSE_CONFIDENCE,
         }),
       ),
     );
@@ -84,12 +87,18 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
     const missingLandmarkCounts = new Map(DEBUG_LANDMARKS.map(({ name }) => [name, 0]));
     let framesWherePoseDetectionRan = 0;
     let framesWithAnyPose = 0;
+    const recordingQualityNotes = [];
 
     for (const [index, time] of sampleTimes.entries()) {
       await seekVideo(video, time);
       framesWherePoseDetectionRan += 1;
       const timestampMs = Math.round(time * 1000);
-      const landmarks = await detector.detectForVideo(video, timestampMs);
+      let landmarks = await detector.detectForVideo(video, timestampMs);
+      if (!landmarks?.length) {
+        const fallbackDetector = await createPoseDetectorWithConfidence(FALLBACK_POSE_CONFIDENCE);
+        landmarks = await fallbackDetector.detectForVideo(video, timestampMs);
+        if (landmarks?.length) recordingQualityNotes.push('Pose tracking confidence was reduced to detect the body; results may be less reliable.');
+      }
 
       if (landmarks?.length && hasAnyVisibleLandmark(landmarks)) {
         framesWithAnyPose += 1;
@@ -111,6 +120,7 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       mostOftenMissingLandmarks: getMostMissingLandmarks(missingLandmarkCounts),
       videoDimensions: { width: video.videoWidth || null, height: video.videoHeight || null },
       finalReason: 'pose-detection-complete',
+      recordingQualityNotes: [...new Set(recordingQualityNotes)],
     };
     logPoseDetectionStats(stats);
     onProgress?.(1);
@@ -125,14 +135,38 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
   }
 }
 
+
+
+async function createPoseDetectorWithConfidence(confidence) {
+  const vision = await FilesetResolver.forVisionTasks(WASM_BASE);
+  const landmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: MODEL_URL, delegate: 'CPU' },
+    runningMode: 'VIDEO',
+    numPoses: 1,
+    minPoseDetectionConfidence: confidence,
+    minPosePresenceConfidence: confidence,
+    minTrackingConfidence: confidence,
+  });
+  return {
+    detectForVideo(video, timestampMs) {
+      const result = landmarker.detectForVideo(video, timestampMs);
+      return result.landmarks?.[0] ?? null;
+    },
+  };
+}
 function createSampleTimes(duration) {
   const safeDuration = duration || MAX_ANALYSIS_SECONDS;
-  const frameCount = Math.max(MIN_SAMPLED_FRAMES, Math.min(MAX_SAMPLED_FRAMES, Math.round(safeDuration * TARGET_SAMPLE_FPS)));
+  const targetCount = Math.round(safeDuration * TARGET_SAMPLE_FPS);
+  const frameCount = Math.max(MIN_SAMPLED_FRAMES, Math.min(MAX_SAMPLED_FRAMES, targetCount));
   if (frameCount <= 1) return [0];
-  return Array.from({ length: frameCount }, (_, index) => {
-    const progress = index / (frameCount - 1);
-    return Math.min(safeDuration, progress * safeDuration);
-  });
+  const step = safeDuration / (frameCount - 1);
+  const times = [];
+  for (let i = 0; i < frameCount; i += 1) times.push(Math.min(safeDuration, i * step));
+  return times;
+}
+
+export function __createSampleTimesForTests(duration) {
+  return createSampleTimes(duration);
 }
 
 function getFiniteDuration(duration) {

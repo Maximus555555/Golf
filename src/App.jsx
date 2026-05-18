@@ -20,7 +20,11 @@ export default function App() {
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisMessage, setAnalysisMessage] = useState('Preparing your swing analysis...');
   const [heightCalibration, setHeightCalibration] = useState({ enabled: false, preferredUnit: 'in' });
-  const [captureSetup, setCaptureSetup] = useState({ view: 'face-on', handedness: 'right' });
+  const [captureSetup, setCaptureSetup] = useState(() => ({
+    view: window.localStorage.getItem('swingfix-view') || 'face-on',
+    handedness: window.localStorage.getItem('swingfix-handedness') || 'right',
+    isMirrored: undefined,
+  }));
 
   const [replayUrl, setReplayUrl] = useState(null);
 
@@ -41,6 +45,11 @@ export default function App() {
     setHeightCalibration(calibrationSetup || { enabled: false, preferredUnit: 'in' });
     setScreen(SCREEN.camera);
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem('swingfix-view', captureSetup.view);
+    window.localStorage.setItem('swingfix-handedness', captureSetup.handedness);
+  }, [captureSetup]);
 
   const handleRecordingComplete = useCallback(async (recordedSwing) => {
     setRecording(recordedSwing);
