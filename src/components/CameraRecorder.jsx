@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-const MAX_RECORDING_MS = 10000;
+const MAX_RECORDING_MS = 8000;
+const PRE_RECORDING_COUNTDOWN_STEPS = ['Ready', 'Set', 'Go!'];
+const COUNTDOWN_STEP_MS = 1000;
 
 function supportedMimeType() {
   if (!window.MediaRecorder) return '';
@@ -16,10 +18,13 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
   const chunksRef = useRef([]);
   const timerRef = useRef(null);
   const countdownRef = useRef(null);
+  const preRecordingCountdownRef = useRef(null);
+  const preRecordingStartRef = useRef(null);
   const isMountedRef = useRef(false);
   const [cameraStatus, setCameraStatus] = useState('idle');
   const [error, setError] = useState('');
   const [isRecording, setIsRecording] = useState(false);
+  const [isCountingDown, setIsCountingDown] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(MAX_RECORDING_MS / 1000);
   const [recordingSupported, setRecordingSupported] = useState(true);
   const [recordingPhasePrompt, setRecordingPhasePrompt] = useState('');
@@ -86,6 +91,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
       isMountedRef.current = false;
       window.clearTimeout(timerRef.current);
       window.clearInterval(countdownRef.current);
+      window.clearInterval(preRecordingCountdownRef.current);
       stopStream();
     };
   }, [startCamera, stopStream]);
@@ -121,12 +127,14 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
   const stopRecording = useCallback(() => {
     window.clearTimeout(timerRef.current);
     window.clearInterval(countdownRef.current);
+    window.clearInterval(preRecordingCountdownRef.current);
+    setIsCountingDown(false);
     if (recorderRef.current?.state === 'recording') {
       recorderRef.current.stop();
     }
   }, []);
 
-  const startRecording = useCallback(() => {
+  const beginRecording = useCallback(() => {
     if (!streamRef.current || !window.MediaRecorder) {
       setRecordingSupported(false);
       setError('Video recording is not supported in this browser. Try the latest iPhone Safari or Chrome.');
@@ -155,6 +163,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     recorder.onerror = () => {
       window.clearTimeout(timerRef.current);
       window.clearInterval(countdownRef.current);
+      window.clearInterval(preRecordingCountdownRef.current);
       setIsRecording(false);
       setRecordingPhasePrompt('');
       setError('Recording stopped unexpectedly. Please try recording again.');
@@ -198,6 +207,33 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
     }, 250);
   }, [heightCalibration?.enabled, onRecordingComplete, stopRecording, stopStream]);
 
+  const startRecording = useCallback(() => {
+    if (isCountingDown || isRecording) return;
+    if (!streamRef.current || !window.MediaRecorder) {
+      setRecordingSupported(false);
+      setError('Video recording is not supported in this browser. Try the latest iPhone Safari or Chrome.');
+      return;
+    }
+
+    window.clearInterval(preRecordingCountdownRef.current);
+    setError('');
+    setIsCountingDown(true);
+    setRecordingPhasePrompt(PRE_RECORDING_COUNTDOWN_STEPS[0]);
+    preRecordingStartRef.current = Date.now();
+
+    preRecordingCountdownRef.current = window.setInterval(() => {
+      const elapsedSeconds = Math.floor((Date.now() - preRecordingStartRef.current) / COUNTDOWN_STEP_MS);
+      const countdownPrompt = PRE_RECORDING_COUNTDOWN_STEPS[Math.min(elapsedSeconds, PRE_RECORDING_COUNTDOWN_STEPS.length - 1)];
+      setRecordingPhasePrompt(countdownPrompt);
+
+      if (elapsedSeconds >= PRE_RECORDING_COUNTDOWN_STEPS.length) {
+        window.clearInterval(preRecordingCountdownRef.current);
+        setIsCountingDown(false);
+        beginRecording();
+      }
+    }, 100);
+  }, [beginRecording, isCountingDown, isRecording]);
+
   return (
     <section className="screen camera-screen">
       <div className="camera-card">
@@ -205,11 +241,12 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
           <video ref={videoRef} className="camera-preview" muted playsInline autoPlay />
           <canvas ref={canvasRef} className="pose-overlay" aria-hidden="true" />
           {isRecording && <div className="recording-badge">Recording · {secondsLeft}s</div>}
-          {isRecording && recordingPhasePrompt && <div className="recording-phase-prompt">{recordingPhasePrompt}</div>}
+          {isCountingDown && <div className="recording-badge">Recording starts soon</div>}
+          {(isRecording || isCountingDown) && recordingPhasePrompt && <div className="recording-phase-prompt">{recordingPhasePrompt}</div>}
         </div>
 
         {heightCalibration?.enabled && (
-          <p className="calibration-camera-instruction">Stand straight for the first 1–2 seconds, then swing.</p>
+          <p className="calibration-camera-instruction">After Ready, Set, Go!, stand straight for height calibration, then swing.</p>
         )}
         {cameraStatus === 'loading' && <p className="status-message">Starting camera...</p>}
         {error && <p className="error-message">{error}</p>}
@@ -218,7 +255,7 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
         )}
 
         <div className="camera-actions">
-          <button className="secondary-button" type="button" onClick={onBack} disabled={isRecording}>
+          <button className="secondary-button" type="button" onClick={onBack} disabled={isRecording || isCountingDown}>
             Back
           </button>
           {!isRecording ? (
@@ -226,9 +263,9 @@ export default function CameraRecorder({ heightCalibration, onBack, onRecordingC
               className="primary-button"
               type="button"
               onClick={startRecording}
-              disabled={cameraStatus !== 'ready' || !recordingSupported}
+              disabled={cameraStatus !== 'ready' || !recordingSupported || isCountingDown}
             >
-              Record Swing
+              {isCountingDown ? 'Get Ready...' : 'Record Swing'}
             </button>
           ) : (
             <button className="stop-button" type="button" onClick={stopRecording}>
