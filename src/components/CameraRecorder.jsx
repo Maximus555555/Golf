@@ -36,14 +36,14 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
   const stopStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
-  }, [enumerateCameras, selectedDeviceId]);
+  }, []);
 
   const enumerateCameras = useCallback(async () => {
     if (!navigator.mediaDevices?.enumerateDevices) return;
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videos = devices.filter((d) => d.kind === "videoinput");
     setCameraOptions(videos.map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Camera ${i + 1}` })));
-  }, [enumerateCameras, selectedDeviceId]);
+  }, []);
 
   const startCamera = useCallback(async (deviceId = selectedDeviceId) => {
     setCameraStatus('loading');
@@ -92,7 +92,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
         setError('The camera could not be started. Check permissions and make sure this page is opened over HTTPS.');
       }
     }
-  }, [enumerateCameras, selectedDeviceId]);
+  }, []);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -132,7 +132,7 @@ export default function CameraRecorder({ heightCalibration, captureSetup, onCapt
     };
     drawOverlay();
     return () => cancelAnimationFrame(animationFrame);
-  }, [enumerateCameras, selectedDeviceId]);
+  }, []);
 
   const stopRecording = useCallback(() => {
     window.clearTimeout(timerRef.current);
