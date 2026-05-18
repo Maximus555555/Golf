@@ -264,7 +264,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   const failureReason = getFullFailureReason(diagnostics);
 
   if (failureReason) {
-    const failureDiagnostics = { ...diagnostics, phaseDetection: getPhaseDiagnostics(phaseDetection),
+    const failureDiagnostics = { ...diagnostics, phaseDetection: getPhaseDiagnostics(phaseDetection, detectedPhases),
     swingPhaseNotes: detectedPhases.notes, skippedIssueCategories: getSkippedIssueCategories({}), reason: failureReason };
     logAnalysisStats(failureDiagnostics);
     return {
@@ -313,8 +313,12 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
   const analyzability = {
     headMovement: makeAnalyzability(headMovementMetrics, 'No reliable head or face landmark was visible often enough.'),
     posture: makeAnalyzability(postureMetrics, 'Shoulders or hips were not visible often enough.'),
-    hipSway: makeAnalyzability(hipMetrics, 'Hips were not clearly visible often enough.'),
-    shoulderTurn: makeAnalyzability(shoulderTurnMetrics, 'Both shoulders were not visible often enough.'),
+    hipSway: selectedView === 'down-the-line'
+      ? { analyzable: false, frames: hipMetrics.length, skippedReason: 'Hip sway is best measured from face-on view.' }
+      : makeAnalyzability(hipMetrics, 'Hips were not clearly visible often enough.'),
+    shoulderTurn: selectedView === 'down-the-line'
+      ? { analyzable: false, frames: shoulderTurnMetrics.length, skippedReason: 'Shoulder turn proxy is less reliable from down-the-line view.' }
+      : makeAnalyzability(shoulderTurnMetrics, 'Both shoulders were not visible often enough.'),
     leadArm: makeAnalyzability(leadArmMetrics, 'A shoulder, elbow, and wrist on the same arm were not visible often enough.'),
     finishBalance: makeAnalyzability(finishBalanceMetrics, 'Hips, knees, and ankles or feet were not visible often enough.'),
   };
@@ -335,12 +339,18 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     };
   }
   const skippedIssueCategories = getSkippedIssueCategories(analyzability);
+  const phaseConfidence = detectedPhases.confidence || 'medium';
   const recordingQualityNotes = addCalibrationQualityNotes(
     phaseDetection.uncertain
       ? [...getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale), makeRecordingNote('phase_detection_uncertain')]
       : getRecordingQualityNotes(metrics, diagnostics, analyzability, outlierReport, stableBodyScale),
     calibration,
   );
+  if (phaseConfidence === 'low') {
+    recordingQualityNotes.push({ code: 'phase_confidence_low', message: 'Swing phase detection confidence was low, so timing-based feedback may be less reliable.' });
+  } else if (phaseConfidence === 'medium') {
+    recordingQualityNotes.push({ code: 'phase_confidence_medium', message: 'Swing phase detection confidence was moderate, so timing-based feedback may be less reliable.' });
+  }
   const detectedIssues = [];
 
   let maxHeadMove = null;
@@ -411,7 +421,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
         makeIssue(
           'lead_arm_collapse',
           severityFromThresholds(180 - percentileLeadArmAngle, 25, 40, 60),
-          clampConfidence((155 - percentileLeadArmAngle) / 50),
+          clampConfidence((155 - percentileLeadArmAngle) / 50) * (phaseConfidence === 'low' ? 0.6 : phaseConfidence === 'medium' ? 0.82 : 1),
           `Estimated lead arm angle: about ${Math.round(percentileLeadArmAngle)}°. Your lead arm appeared to bend near the top of the backswing.`,
         ),
       );
@@ -448,7 +458,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
         makeIssue(
           'hip_sway',
           severityFromThresholds(percentileHipSway, 0.15, 0.22, 0.32),
-          clampConfidence((percentileHipSway - 0.08) / 0.35),
+          clampConfidence((percentileHipSway - 0.08) / 0.35) * (phaseConfidence === 'low' ? 0.6 : phaseConfidence === 'medium' ? 0.82 : 1),
           percentileHipSway > 0.22
             ? 'Your hips swayed too far away from the target in the backswing. That can make recentering harder.'
             : 'Your hips drifted a little too far away from the target in the backswing.',
@@ -494,7 +504,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
         makeIssue(
           'weak_shoulder_turn',
           severityFromThresholds(shoulderTurnRatio, 0.82, 0.88, 0.95),
-          0.42,
+          0.42 * (phaseConfidence === 'low' ? 0.6 : phaseConfidence === 'medium' ? 0.82 : 1),
           `Shoulder turn angle was unavailable, so a 2D ratio proxy was used. Visible shoulder line stayed near ${Math.round(shoulderTurnRatio * 100)}% of setup width.`,
         ),
       );
@@ -548,7 +558,7 @@ export function analyzeSwing(poseTimeline = [], videoStats = {}, calibrationSetu
     shoulderTurnProxyUsed,
     postureViewConfidence: selectedView === 'face-on' ? 'lower_from_face_on' : 'normal',
     recordingAnalyzability,
-    phaseDetection: getPhaseDiagnostics(phaseDetection),
+    phaseDetection: getPhaseDiagnostics(phaseDetection, detectedPhases),
     swingPhaseNotes: detectedPhases.notes,
     clampedOrDiscarded: calculationDiagnostics.clampedOrDiscarded,
     reason: 'passed-with-visible-pose-data',
@@ -765,7 +775,7 @@ function getPostureFeedbackSentence(changeType) {
   return 'Your posture changed significantly during the swing.';
 }
 
-function getPhaseDiagnostics(phaseDetection) {
+function getPhaseDiagnostics(phaseDetection, detectedPhases = {}) {
   return {
     totalFrames: phaseDetection.frames?.length ?? 0,
     calibrationFrameRange: phaseDetection.ranges?.calibration,
@@ -780,6 +790,13 @@ function getPhaseDiagnostics(phaseDetection) {
     swingEndTimeMs: phaseDetection.swingEndTimeMs,
     calibrationFramesExcluded: phaseDetection.calibrationFramesExcluded,
     uncertain: phaseDetection.uncertain,
+    confidence: detectedPhases.confidence,
+    usedAddressFallback: detectedPhases.usedAddressFallback,
+    usedTopFallback: detectedPhases.usedTopFallback,
+    usedImpactFallback: detectedPhases.usedImpactFallback,
+    topDetectedBy: detectedPhases.topDetectedBy,
+    impactDetectedBy: detectedPhases.impactDetectedBy,
+    swingFrameCount: detectedPhases.swingFrameCount,
   };
 }
 
@@ -1101,22 +1118,30 @@ function makeRecordingNote(code) {
 }
 
 function getRecordingAnalyzability(diagnostics, analyzability, detectedPhases, stableBodyScale, selectedView) {
-  const notes = [];
-  if (diagnostics.framesWithAnyPose < 30) notes.push('Too few frames with pose landmarks.');
-  if (diagnostics.usableFramePercentage < 0.5) notes.push('Usable frame percentage is below 50%.');
-  if (stableBodyScale.scaleUnstable && diagnostics.framesWithAnyPose < 45) notes.push('Body scale confidence is low with limited reliable frames.');
-  if (!Number.isFinite(detectedPhases.addressIndex)) notes.push('Address phase was not detected.');
-  if (!Number.isFinite(detectedPhases.topIndex)) notes.push('Top of backswing was not detected.');
-  if (detectedPhases.confidence === 'low' && diagnostics.framesWithAnyPose < 50) notes.push('Phase confidence is low with limited swing frames.');
-  if (!analyzability.shoulderTurn?.analyzable && !analyzability.posture?.analyzable) notes.push('Shoulders were visible too rarely for key metrics.');
-  if (selectedView !== 'face-on') notes.push('Some lateral metrics are less reliable from down-the-line.');
+  const blockingReasons = [];
+  const cautionNotes = [];
+  if (diagnostics.framesWithAnyPose < 30) blockingReasons.push('Too few frames with pose landmarks.');
+  if (diagnostics.usableFramePercentage < 0.5) blockingReasons.push('Usable frame percentage is below 50%.');
+  if (stableBodyScale.scaleUnstable && diagnostics.framesWithAnyPose < 45) blockingReasons.push('Body scale confidence is low with limited reliable frames.');
+  if (!Number.isFinite(detectedPhases.addressIndex)) blockingReasons.push('Address phase was not detected.');
+  if (!Number.isFinite(detectedPhases.topIndex)) blockingReasons.push('Top of backswing was not detected.');
+  if (!analyzability.shoulderTurn?.analyzable && !analyzability.posture?.analyzable) blockingReasons.push('Shoulders were visible too rarely for major metrics.');
+  const analyzableMetricCount = Object.values(analyzability || {}).filter((item) => item?.analyzable).length;
+  if (analyzableMetricCount < 2) blockingReasons.push('Too few major metrics were analyzable from this recording.');
 
-  const analyzable = notes.length === 0;
+  if (selectedView === 'down-the-line') cautionNotes.push('Some lateral metrics are less reliable from down-the-line view.');
+  if (selectedView === 'face-on') cautionNotes.push('Posture metric confidence is lower from face-on video.');
+  cautionNotes.push('Shoulder turn uses a 2D proxy instead of a full turn angle.');
+  cautionNotes.push('Mirror status was not confirmed; left/right movement assumptions may be less reliable.');
+  if (detectedPhases.confidence !== 'high') cautionNotes.push('Swing phase detection confidence was not high, so timing-based feedback may be less reliable.');
+
+  const analyzable = blockingReasons.length === 0;
   return {
     analyzable,
     qualityLevel: analyzable ? (diagnostics.usableFramePercentage > 0.7 ? 'good' : 'usable') : 'poor',
     reason: analyzable ? null : 'insufficient_pose_quality',
-    notes,
+    blockingReasons,
+    cautionNotes,
   };
 }
 

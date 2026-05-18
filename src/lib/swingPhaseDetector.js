@@ -106,24 +106,50 @@ export function detectSwingPhases(poseTimeline = [], options = {}) {
     const hipStable = hasPair(frames[i], LANDMARK.leftHip, LANDMARK.rightHip);
     if (shoulderStable && hipStable && (movementScores[i] || 0) < threshold) stableBeforeTakeaway.push(i);
   }
+
+  let usedAddressFallback = false;
   const addressIndex = stableBeforeTakeaway.length ? stableBeforeTakeaway[stableBeforeTakeaway.length - 1] : Math.max(0, takeawayStartIndex - 1);
+  if (!stableBeforeTakeaway.length) {
+    usedAddressFallback = true;
+    notes.push('Address index fallback used.');
+  }
 
   const swingEnd = findSwingEndFrame(movementScores, takeawayStartIndex, threshold, frames.length);
+  const swingFrameCount = Math.max(0, swingEnd - takeawayStartIndex + 1);
   let topIndex = null;
-  let bestScore = -Infinity;
+  let topDetectedBy = 'fallback';
+  let usedTopFallback = false;
+  let bestTopScore = -Infinity;
+
   for (let i = takeawayStartIndex + 1; i < swingEnd - 2; i += 1) {
     const lw = visiblePoint(frames[i], LANDMARK.leftWrist); const rw = visiblePoint(frames[i], LANDMARK.rightWrist);
     const shoulderW = distance(visiblePoint(frames[i], LANDMARK.leftShoulder), visiblePoint(frames[i], LANDMARK.rightShoulder));
     const wristX = median([lw?.x, rw?.x]);
-    const prev = median([visiblePoint(frames[i-1], LANDMARK.leftWrist)?.x, visiblePoint(frames[i-1], LANDMARK.rightWrist)?.x]);
-    const next = median([visiblePoint(frames[i+1], LANDMARK.leftWrist)?.x, visiblePoint(frames[i+1], LANDMARK.rightWrist)?.x]);
-    const reversal = Number.isFinite(prev)&&Number.isFinite(next)&&Number.isFinite(wristX) ? Math.sign(wristX-prev)!==Math.sign(next-wristX) : false;
-    const score = (reversal ? 1.2 : 0) + (Number.isFinite(shoulderW) ? (1-Math.min(1, shoulderW/0.45)) : 0);
-    if (score > bestScore) { bestScore = score; topIndex = i; }
+    const prev = median([visiblePoint(frames[i - 1], LANDMARK.leftWrist)?.x, visiblePoint(frames[i - 1], LANDMARK.rightWrist)?.x]);
+    const next = median([visiblePoint(frames[i + 1], LANDMARK.leftWrist)?.x, visiblePoint(frames[i + 1], LANDMARK.rightWrist)?.x]);
+    const reversal = Number.isFinite(prev) && Number.isFinite(next) && Number.isFinite(wristX) ? Math.sign(wristX - prev) !== Math.sign(next - wristX) : false;
+    const shoulderCompressed = Number.isFinite(shoulderW) ? (1 - Math.min(1, shoulderW / 0.45)) : 0;
+    const score = (reversal ? 1.25 : 0) + shoulderCompressed;
+    if (score > bestTopScore) {
+      bestTopScore = score;
+      topIndex = i;
+      if (reversal && shoulderCompressed > 0.2) topDetectedBy = 'combined';
+      else if (reversal) topDetectedBy = 'wrist-reversal';
+      else if (shoulderCompressed > 0.4) topDetectedBy = 'shoulder-width';
+      else topDetectedBy = 'fallback';
+    }
   }
-  if (!Number.isFinite(topIndex)) { topIndex = Math.floor((takeawayStartIndex + swingEnd) * 0.55); notes.push('Top index fallback used.'); }
+
+  if (!Number.isFinite(topIndex) || bestTopScore < 0.6 || topDetectedBy === 'fallback') {
+    topIndex = Math.floor((takeawayStartIndex + swingEnd) * 0.55);
+    usedTopFallback = true;
+    topDetectedBy = 'fallback';
+    notes.push('Top index fallback used.');
+  }
 
   let impactIndex = null;
+  let impactDetectedBy = 'fallback';
+  let usedImpactFallback = false;
   const addressWristX = median([visiblePoint(frames[addressIndex], LANDMARK.leftWrist)?.x, visiblePoint(frames[addressIndex], LANDMARK.rightWrist)?.x]);
   let bestImpactDist = Infinity;
   for (let i = topIndex + 1; i <= swingEnd; i += 1) {
@@ -132,11 +158,27 @@ export function detectSwingPhases(poseTimeline = [], options = {}) {
     const d = Math.abs(wx - addressWristX);
     if (d < bestImpactDist) { bestImpactDist = d; impactIndex = i; }
   }
-  if (!Number.isFinite(impactIndex)) { impactIndex = Math.floor((takeawayStartIndex + swingEnd) * 0.8); notes.push('Impact index fallback used.'); }
+
+  if (Number.isFinite(impactIndex) && Number.isFinite(bestImpactDist) && bestImpactDist < 0.11) {
+    impactDetectedBy = 'hand-return';
+  } else {
+    impactIndex = Math.floor((takeawayStartIndex + swingEnd) * 0.8);
+    impactDetectedBy = 'fallback';
+    usedImpactFallback = true;
+    notes.push('Impact index fallback used.');
+  }
 
   const finishIndex = Math.min(frames.length - 1, Math.max(impactIndex + 1, swingEnd));
-  const confidence = notes.length ? 'low' : 'high';
+  const enoughSwingFrames = swingFrameCount >= 8;
+  const sustainedTakeaway = takeawayStartIndex >= Math.max(0, minStartIndex);
+
+  let confidence = 'medium';
+  if (usedAddressFallback || usedTopFallback || usedImpactFallback || !enoughSwingFrames || topDetectedBy === 'fallback') confidence = 'low';
+  else if (sustainedTakeaway && ['wrist-reversal', 'shoulder-width', 'combined'].includes(topDetectedBy) && impactDetectedBy === 'hand-return') confidence = 'high';
+
   notes.push(`Detected phase indices: address=${addressIndex ?? 'n/a'}, top=${topIndex ?? 'n/a'}, impact=${impactIndex ?? 'n/a'}`);
+  notes.push(`Phase confidence: ${confidence}; topDetectedBy=${topDetectedBy}; impactDetectedBy=${impactDetectedBy}; swingFrames=${swingFrameCount}`);
+
   return {
     addressIndex,
     takeawayStartIndex,
@@ -146,6 +188,12 @@ export function detectSwingPhases(poseTimeline = [], options = {}) {
     analysisStartIndex: addressIndex,
     analysisEndIndex: finishIndex,
     confidence,
+    usedAddressFallback,
+    usedTopFallback,
+    usedImpactFallback,
+    topDetectedBy,
+    impactDetectedBy,
+    swingFrameCount,
     notes,
   };
 }
