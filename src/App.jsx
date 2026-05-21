@@ -65,6 +65,17 @@ export default function App() {
   }, [captureSetup]);
 
   const handleRecordingComplete = useCallback(async (recordedSwing) => {
+    if (!recordedSwing?.blob) {
+      setAnalysis({
+        ...analyzeSwing([], { finalReason: 'missing-video-blob' }, { ...heightCalibration, ...captureSetup }),
+        poseFrameCount: 0,
+        error: 'No recorded video was found. Please record your swing again.',
+        fullFailure: true,
+      });
+      setScreen(SCREEN.results);
+      return;
+    }
+
     setRecording(recordedSwing);
     setScreen(SCREEN.analyzing);
     setAnalysisProgress(0);
@@ -91,7 +102,7 @@ export default function App() {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Pose analysis was unavailable for this recording.';
-      const fallbackFeedback = analyzeSwing([], { finalReason: errorMessage }, heightCalibration);
+      const fallbackFeedback = analyzeSwing([], { finalReason: errorMessage }, { ...heightCalibration, ...captureSetup });
       setAnalysis({
         ...fallbackFeedback,
         poseFrameCount: 0,
