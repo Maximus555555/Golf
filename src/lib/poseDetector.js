@@ -11,6 +11,8 @@ const MIN_RELIABLE_LANDMARK_VISIBILITY = 0.45;
 const DEFAULT_POSE_CONFIDENCE = 0.5;
 const FALLBACK_POSE_CONFIDENCE = 0.4;
 const CONFIDENCE_RETRY_FAILURE_RATIO = 0.55;
+const FALLBACK_STREAK_TRIGGER = 3;
+const FALLBACK_RECOVERY_FRAMES = 6;
 
 const DEBUG_LANDMARKS = [
   { name: 'nose', index: 0 },
@@ -78,6 +80,8 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
     let fallbackDetector = null;
     let framesUsingFallback = 0;
     let firstDetectionError = null;
+    let consecutivePrimaryMisses = 0;
+    let fallbackRecoveryBudget = 0;
 
     for (const [index, time] of sampleTimes.entries()) {
       await seekVideo(video, time);
@@ -96,17 +100,21 @@ export async function analyzeVideoBlob(videoBlob, { onProgress } = {}) {
       }
       frameHadRawLandmarks = Boolean(landmarks?.length);
       frameHadPersonLikePose = hasAnyPersonLikePose(landmarks);
-      const shouldRetryFallback = !landmarks?.length || !hasAnyVisibleLandmark(landmarks) || !hasAnyPersonLikePose(landmarks);
+      const primaryReliable = Boolean(landmarks?.length && hasAnyVisibleLandmark(landmarks) && hasAnyPersonLikePose(landmarks));
+      consecutivePrimaryMisses = primaryReliable ? 0 : consecutivePrimaryMisses + 1;
+      const shouldRetryFallback = !primaryReliable && (consecutivePrimaryMisses >= FALLBACK_STREAK_TRIGGER || fallbackRecoveryBudget > 0);
       if (shouldRetryFallback) {
         if (!fallbackDetector) fallbackDetector = await createFallbackPoseDetector();
         const fallbackLandmarks = await fallbackDetector.detectForVideo(frameSource, timestampMs);
         if (fallbackLandmarks?.length) {
           frameUsedFallback = true;
           landmarks = fallbackLandmarks;
+          fallbackRecoveryBudget = FALLBACK_RECOVERY_FRAMES;
         }
         frameHadRawLandmarks = frameHadRawLandmarks || Boolean(landmarks?.length);
         frameHadPersonLikePose = frameHadPersonLikePose || hasAnyPersonLikePose(landmarks);
       }
+      if (fallbackRecoveryBudget > 0 && primaryReliable) fallbackRecoveryBudget -= 1;
       if (frameHadRawLandmarks) framesWithRawLandmarks += 1;
       if (frameHadPersonLikePose) framesWithAnyPersonLikePose += 1;
       if (frameUsedFallback) framesUsingFallback += 1;
